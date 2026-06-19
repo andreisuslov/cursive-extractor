@@ -23,6 +23,10 @@ CROP_PAD_FRAC = float(os.environ.get("OCR_CROP_PAD_FRAC", "0.12"))
 # After padding, grow the box until no ink touches its borders (no clipped
 # strokes). Vectorize and package_boxes MUST agree on this so overlays align.
 CROP_FIT_INK = os.environ.get("OCR_CROP_FIT_INK", "1") not in ("0", "false", "False", "")
+# Clean each word crop before vectorizing: strip ruled lines / scan-edge bands and
+# keep only the target word's ink (drop neighbouring words/lines). See
+# vectorize.clean_word. Disable with OCR_CROP_CLEAN=0.
+CROP_CLEAN = os.environ.get("OCR_CROP_CLEAN", "1") not in ("0", "false", "False", "")
 
 # The HTML template ships alongside this package.
 HTML_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "handwriting_tool.html")

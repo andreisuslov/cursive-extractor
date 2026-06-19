@@ -26,10 +26,10 @@ import argparse
 
 import cv2
 import numpy as np
-from PIL import ImageEnhance
+from PIL import Image, ImageEnhance
 
 from . import config, paths
-from .pdf_utils import load_page, crop_to_box
+from .pdf_utils import load_page, crop_to_box, box_to_crop_box, fit_crop_to_ink
 
 
 def preprocess(gray):
@@ -189,6 +189,105 @@ def format_strokes(strokes, crop_width, crop_height):
     return out
 
 
+# --- Clean per-word crop: strip ruled lines / bands / neighbours -------------
+
+def remove_ruled_lines(binary, span_frac=0.8, max_thick=4):
+    """Remove TRUE ruled lines: thin, near-full-width horizontal runs that touch
+    both side edges of the crop. Word strokes (thick, undulating, not edge-to-edge
+    in a padded crop) are preserved."""
+    h, w = binary.shape
+    klen = max(20, int(span_frac * w))
+    horiz = cv2.morphologyEx(binary, cv2.MORPH_OPEN,
+                             cv2.getStructuringElement(cv2.MORPH_RECT, (klen, 1)))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats((horiz > 0).astype(np.uint8), 8)
+    line_mask = np.zeros_like(binary)
+    for lbl in range(1, n):
+        x, y, bw, bh, _ = stats[lbl]
+        if bh <= max_thick and bw >= span_frac * w and x <= 2 and x + bw >= w - 2:
+            line_mask[labels == lbl] = 255
+    if not line_mask.any():
+        return binary
+    line_mask = cv2.dilate(line_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 5)))
+    cleaned = cv2.subtract(binary, cv2.bitwise_and(binary, line_mask))
+    return cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE,  # reclose strokes a line cut
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+
+
+def keep_target_components(binary, rect, min_area=14):
+    """Keep ink components overlapping the (already-expanded) ``rect`` (x0,y0,x1,y1)
+    in crop px; drop noise and components that hug a side edge as a tall band
+    (scan-edge artifact)."""
+    x0, y0, x1, y1 = rect
+    H_, W_ = binary.shape
+    n, labels, stats, _ = cv2.connectedComponentsWithStats((binary > 0).astype(np.uint8), 8)
+    out = np.zeros_like(binary)
+    for lbl in range(1, n):
+        x, y, w, h, area = stats[lbl]
+        if area < min_area:
+            continue
+        # drop a tall thin component glued to the left/right edge (scan-edge band)
+        if (x <= 1 or x + w >= W_ - 1) and h >= 0.8 * H_ and w <= max(6, 0.05 * W_):
+            continue
+        if min(x + w, x1) > max(x, x0) and min(y + h, y1) > max(y, y0):
+            out[labels == lbl] = 255
+    return out
+
+
+def clean_word(page_image, box_2d, padding=None, pad_frac=None,
+               tighten=True, margin=6):
+    """Crop a word, strip ruled lines / scan bands / neighbours, optionally tighten
+    to the kept ink. Returns ``(clean_gray_PIL, clean_binary, crop_box)``.
+
+    ``clean_gray_PIL`` is the original ink kept only where the target word is
+    (neighbours whitened) -- a clean per-word image. ``clean_binary`` is its ink
+    mask, ready for ``trace_ink``. Deterministic, so vectorize and package_boxes
+    agree when both call it.
+    """
+    padding = config.CROP_PADDING if padding is None else padding
+    pad_frac = config.CROP_PAD_FRAC if pad_frac is None else pad_frac
+    wpx, hpx = page_image.size
+    # Base on the DETECTED box with margin LARGER than the band reach below, so the
+    # vertical band can actually cut INSIDE the crop (not clamp to its edge). Not
+    # fit_crop_to_ink -- the ink-fit over-expands into neighbours on a dense page.
+    cb = box_to_crop_box(box_2d, wpx, hpx, padding, max(pad_frac, 0.85))
+    left, top, right, bottom = cb
+
+    gray = np.array(page_image.crop(cb).convert("L"))
+    binary = remove_ruled_lines(preprocess(gray))
+    sx, sy = wpx / 1000.0, hpx / 1000.0
+    rx0, ry0 = box_2d[1] * sx - left, box_2d[0] * sy - top
+    rx1, ry1 = box_2d[3] * sx - left, box_2d[2] * sy - top
+    bw, bh = max(1.0, rx1 - rx0), max(1.0, ry1 - ry0)
+
+    # VERTICAL band clamp (uses box height -> robust even to a bad tall box): cuts
+    # a descender merging into the next line, and removes other lines entirely.
+    # Horizontal stays generous (scaled to max(bw,bh)) so a narrow/mis-shaped box
+    # never truncates a wide word.
+    H_, W_ = binary.shape
+    # Band reaches up ~0.45x for ascenders, down ~0.75x for descenders; tight
+    # enough to exclude an adjacent line on densely-ruled paper.
+    y0c, y1c = max(0, int(ry0 - 0.5 * bh)), min(H_, int(ry1 + 0.8 * bh))
+    band = np.zeros_like(binary)
+    band[y0c:y1c, :] = binary[y0c:y1c, :]
+    # Tight horizontal keep (the word's own x-range + small margin) so same-line
+    # neighbour words are excluded. A mis-shaped detection box may truncate -- that
+    # is a detection problem, not a cropping one.
+    ex = 0.12 * bw
+    binary = keep_target_components(band, (rx0 - ex, y0c, rx1 + ex, y1c))
+
+    if tighten and binary.any():
+        ys, xs = np.nonzero(binary)
+        tx0, ty0 = max(0, int(xs.min()) - margin), max(0, int(ys.min()) - margin)
+        tx1 = min(binary.shape[1], int(xs.max()) + 1 + margin)
+        ty1 = min(binary.shape[0], int(ys.max()) + 1 + margin)
+        binary, gray = binary[ty0:ty1, tx0:tx1], gray[ty0:ty1, tx0:tx1]
+        cb = (left + tx0, top + ty0, left + tx1, top + ty1)
+
+    clean = np.full_like(gray, 255)
+    clean[binary > 0] = gray[binary > 0]
+    return Image.fromarray(clean), binary, cb
+
+
 def vectorize_pil_crop(pil_crop, contrast=2.0):
     """Vectorize a PIL crop -> list of normalized [x, y, state] points."""
     img = ImageEnhance.Contrast(pil_crop).enhance(contrast) if contrast else pil_crop
@@ -222,22 +321,30 @@ def vectorize_image_file(input_path, overlay_path=None):
 
 
 def vectorize_boxes(pdf_path, boxes, page_index, dpi=600, padding=None,
-                    pad_frac=None, fit_ink=None, limit=None):
+                    pad_frac=None, fit_ink=None, clean=None, limit=None):
     """Add {points, metadata} to each box entry, in place. Returns ``boxes``.
 
+    With ``clean`` (default ``config.CROP_CLEAN``) each word crop is cleaned
+    (ruled lines / scan bands / neighbour words removed) before tracing.
     ``limit`` vectorizes only the first N entries (the rest are left untouched).
     """
     padding = config.CROP_PADDING if padding is None else padding
     pad_frac = config.CROP_PAD_FRAC if pad_frac is None else pad_frac
     fit_ink = config.CROP_FIT_INK if fit_ink is None else fit_ink
+    clean = config.CROP_CLEAN if clean is None else clean
     page = load_page(pdf_path, page_index, dpi=dpi)
     processed = 0
     for entry in (boxes if limit is None else boxes[:limit]):
         if "box_2d" not in entry:
             continue
-        crop, _ = crop_to_box(page, entry["box_2d"], padding, pad_frac, fit_ink)
-        points = vectorize_pil_crop(crop)
-        crop_width, crop_height = crop.size
+        if clean:
+            _, binary, _ = clean_word(page, entry["box_2d"], padding, pad_frac)
+            crop_height, crop_width = binary.shape
+            points = format_strokes(trace_ink(binary), crop_width, crop_height)
+        else:
+            crop, _ = crop_to_box(page, entry["box_2d"], padding, pad_frac, fit_ink)
+            points = vectorize_pil_crop(crop)
+            crop_width, crop_height = crop.size
         entry["points"] = points
         entry["metadata"] = {
             "author": "robot",

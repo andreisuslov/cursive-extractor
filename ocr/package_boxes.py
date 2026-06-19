@@ -40,18 +40,26 @@ def draw_vectorized(crop_image, points, color=TEAL, width=2):
 
 
 def package_boxes(pdf_path, data, page, version=None, root=None,
-                  dpi=600, padding=None, pad_frac=None, fit_ink=None, limit=None):
-    """Write a per-box folder for every entry with a ``box_2d``. Returns count."""
+                  dpi=600, padding=None, pad_frac=None, fit_ink=None, clean=None, limit=None):
+    """Write a per-box folder for every entry with a ``box_2d``. Returns count.
+
+    With ``clean`` (default ``config.CROP_CLEAN``) box.jpg is the cleaned per-word
+    crop (matching the cleaned strokes so the teal overlay stays aligned)."""
+    from .vectorize import clean_word
     padding = config.CROP_PADDING if padding is None else padding
     pad_frac = config.CROP_PAD_FRAC if pad_frac is None else pad_frac
     fit_ink = config.CROP_FIT_INK if fit_ink is None else fit_ink
+    clean = config.CROP_CLEAN if clean is None else clean
     page_image = load_page(pdf_path, page - 1, dpi=dpi)
     made = 0
     for i, entry in enumerate(data if limit is None else data[:limit]):
         if "box_2d" not in entry:
             continue
         bdir = paths.ensure_dir(paths.box_dir(pdf_path, page, i, version, root))
-        crop, _ = crop_to_box(page_image, entry["box_2d"], padding, pad_frac, fit_ink)
+        if clean:
+            crop, _, _ = clean_word(page_image, entry["box_2d"], padding, pad_frac)
+        else:
+            crop, _ = crop_to_box(page_image, entry["box_2d"], padding, pad_frac, fit_ink)
 
         with open(os.path.join(bdir, paths.BOX_TEXT_FILE), "w") as f:
             f.write(entry.get("text", ""))
