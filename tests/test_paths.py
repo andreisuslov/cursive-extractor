@@ -27,8 +27,7 @@ def test_page_file_and_builders():
     pdf = "x/doc.pdf"
     assert paths.boxes_json(pdf, 4, None, "outputs") == "outputs/doc/page_004/doc_p004_boxes.json"
     assert (
-        paths.strokes_json(pdf, 4, None, "outputs")
-        == "outputs/doc/page_004/doc_p004_strokes.json"
+        paths.strokes_json(pdf, 4, None, "outputs") == "outputs/doc/page_004/doc_p004_strokes.json"
     )
     assert (
         paths._page_file(pdf, 4, 1, "outputs", "x.json")

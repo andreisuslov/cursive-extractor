@@ -7,6 +7,7 @@ to ``redo_output`` as a ``const words = [...]`` JS list for re-collection.
 
     python setup_easybank.py synthbank.json easybank.json redobank.txt
 """
+
 import json
 import sys
 
