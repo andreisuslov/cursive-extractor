@@ -17,7 +17,8 @@ from sample import save_samples
 
 
 @torch.inference_mode()
-def evaluate(model, dataset, batch_size=15, max_batches=None):
+def evaluate(model, dataset, batch_size: int = 15, max_batches: int | None = None) -> float:
+    """Mean loss over up to ``max_batches`` random batches of ``dataset`` (eval mode)."""
     model.eval()
     loader = DataLoader(dataset, shuffle=True, batch_size=batch_size, num_workers=0)
     losses = []
@@ -62,8 +63,6 @@ if __name__ == "__main__":
     )
 
     wandb.watch(model, log="all", log_freq=args.log_every, log_graph=False)  # model saving stuff
-
-    ########## ARGS, LOGGING, AND TRAIN LOOP ##########
 
     # training loop
     while True:

@@ -22,7 +22,9 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 @functools.lru_cache(maxsize=5)
-def load_and_parse_data(dataset_name):
+def load_and_parse_data(dataset_name: str) -> list:
+    """Load ``data/<dataset_name>.json.zip`` and normalize each item's points (apply
+    aspect ratio, shift x to start at 0, recenter y). Cached per dataset name."""
     file_path = f"{CURRENT_DIR}/data/{dataset_name}.json.zip"
     print(f"Trying to load dataset file from {file_path}")
 
@@ -41,7 +43,9 @@ def load_and_parse_data(dataset_name):
     return data
 
 
-def combine_handwriting_examples(examples):
+def combine_handwriting_examples(examples: list) -> dict:
+    """Merge several single-word examples into one multi-word example (concatenated
+    text, summed counts, list of per-word point arrays)."""
     return {
         "metadata": {
             "author": examples[0]["metadata"]["author"],
@@ -54,7 +58,10 @@ def combine_handwriting_examples(examples):
     }
 
 
-def generate_word_combos(raw_json, desired_num_combos=10000, num_words=3):
+def generate_word_combos(
+    raw_json: list, desired_num_combos: int = 10000, num_words: int = 3
+) -> list:
+    """Sample ``desired_num_combos`` random ``num_words``-word examples from ``raw_json``."""
     num_combos = comb(len(raw_json), num_words)
     print(
         f"For a dataset of {len(raw_json)} examples we can generate "
@@ -72,21 +79,25 @@ def generate_word_combos(raw_json, desired_num_combos=10000, num_words=3):
 ########## TOKENIZATION, AUGMENTATION, AND DATA IO ##########
 
 
-def decompose_offsets(offsets):
+def decompose_offsets(offsets: np.ndarray) -> np.ndarray:
+    """Cartesian ``(dx, dy, pen)`` offsets -> polar ``(r, theta, pen)``."""
     dx, dy = offsets[:, 0], offsets[:, 1]
     r = np.hypot(dx, dy)
     theta = np.arctan2(dy, dx)
     return np.column_stack((r, theta, offsets[:, 2]))
 
 
-def reconstruct_offsets(polar_data):
+def reconstruct_offsets(polar_data: np.ndarray) -> np.ndarray:
+    """Polar ``(r, theta, pen)`` -> Cartesian ``(dx, dy, pen)`` (inverse of decompose_offsets)."""
     r, theta = polar_data[:, 0], polar_data[:, 1]
     dx = r * np.cos(theta)
     dy = r * np.sin(theta)
     return np.column_stack((dx, dy, polar_data[:, 2]))
 
 
-def strokes_to_offsets(points, prev_points=None):
+def strokes_to_offsets(points: np.ndarray, prev_points: np.ndarray | None = None) -> np.ndarray:
+    """Absolute ``(x, y, pen)`` points -> polar offsets. ``prev_points`` (the previous
+    word) seeds the first offset so consecutive words are spaced correctly."""
     offsets = np.zeros_like(points)
     offsets[1:, 0:2] = np.diff(points[:, 0:2], axis=0)  # Same dx, dy computation
 
@@ -100,7 +111,8 @@ def strokes_to_offsets(points, prev_points=None):
     return decompose_offsets(offsets)
 
 
-def offsets_to_strokes(offsets_dec):
+def offsets_to_strokes(offsets_dec: np.ndarray) -> np.ndarray:
+    """Polar offsets -> absolute ``(x, y, pen)`` points (cumulative sum of dx, dy)."""
     # Calculate cumulative sums over (dx, dt) to get absolute pen positions
     offsets = reconstruct_offsets(offsets_dec)
 
@@ -109,14 +121,20 @@ def offsets_to_strokes(offsets_dec):
     return stroke_data
 
 
-def random_horizontal_shear(stroke, shear_range=(-0.4, 0.4)):
+def random_horizontal_shear(
+    stroke: np.ndarray, shear_range: tuple[float, float] = (-0.4, 0.4)
+) -> np.ndarray:
+    """Shear x by a random factor in ``shear_range`` (x' = x + factor*y); modifies in place."""
     shear_factor = np.random.uniform(*shear_range)
     shear_matrix = np.array([[1, shear_factor], [0, 1]])
     stroke[:, :2] = np.dot(stroke[:, :2], shear_matrix.T)
     return stroke
 
 
-def random_rotate(stroke, angle_range=(-0.08, 0.08)):
+def random_rotate(
+    stroke: np.ndarray, angle_range: tuple[float, float] = (-0.08, 0.08)
+) -> np.ndarray:
+    """Rotate xy by a random angle (degrees) in ``angle_range``; modifies in place."""
     angle = np.random.uniform(*angle_range)
     rad = np.deg2rad(angle)
     rotation_matrix = np.array([[np.cos(rad), -np.sin(rad)], [np.sin(rad), np.cos(rad)]])
@@ -124,7 +142,10 @@ def random_rotate(stroke, angle_range=(-0.08, 0.08)):
     return stroke
 
 
-def downsample(arr, fraction, drop_prob=0.05):
+def downsample(arr: np.ndarray, fraction: float, drop_prob: float = 0.05) -> np.ndarray:
+    """Reduce each stroke's point count by ``fraction`` (linspace resample), then randomly
+    drop interior points with probability ``drop_prob`` (endpoints always kept). Pen-up
+    markers and stroke boundaries are preserved; ``fraction == 1`` returns ``arr`` unchanged."""
     if fraction == 1:
         return arr
     result, stroke = [], []
@@ -227,19 +248,19 @@ class StrokeDataset(Dataset):
         stroke = downsample(stroke, downsample_percent)
         return stroke
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.raw_word_strokes)
 
-    def get_vocab_size(self):
+    def get_vocab_size(self) -> int:
         return sum(self.feature_sizes) + 3  # +3 for PAD, END, and WORD tokens
 
-    def get_char_vocab_size(self):
+    def get_char_vocab_size(self) -> int:
         return len(self.alphabet) + 1  # +1 for PAD token
 
-    def get_stroke_seq_length(self):
+    def get_stroke_seq_length(self) -> int:
         return self.max_seq_length
 
-    def get_text_seq_length(self):
+    def get_text_seq_length(self) -> int:
         return self.max_text_length
 
     def encode_stroke(self, stroke):
@@ -342,7 +363,9 @@ class StrokeDataset(Dataset):
         return x, c, y
 
 
-def create_datasets(args):
+def create_datasets(args) -> tuple[StrokeDataset, StrokeDataset]:
+    """Load the dataset, split train/test, combinatorially expand into multi-word
+    examples, and wrap them as ``(train_dataset, test_dataset)`` StrokeDatasets."""
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     data = load_and_parse_data(args.dataset_name)

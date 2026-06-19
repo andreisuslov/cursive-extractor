@@ -17,7 +17,12 @@ from torch.nn import functional as F
 ########## ALL ARGUMENTS ##########
 
 
-def get_all_args(use_argparse=True):
+def get_all_args(use_argparse: bool = True):
+    """Single source of truth for hyperparameters and their defaults/types/help.
+
+    Returns an argparse-parsed Namespace, or -- with ``use_argparse=False`` -- a
+    SimpleNamespace of the defaults for notebook/programmatic use.
+    """
     args_config = {
         "max_steps": (110000, int, "How many steps to train for"),
         "print_every": (100, int, "Print log info after how many steps"),
@@ -76,7 +81,11 @@ def get_all_args(use_argparse=True):
 ########## MODEL I/O ##########
 
 
-def get_checkpoint(args, sample_only):
+def get_checkpoint(args, sample_only: bool):
+    """Build the model (and, unless ``sample_only``, the AdamW optimizer + StepLR
+    scheduler), optionally restoring weights/optimizer/step from a local checkpoint or
+    a W&B run artifact. Returns ``(model, optimizer, scheduler, step, best_loss)``.
+    """
     model = Transformer(args)
     model.to(args.device)
     print(f"Model #params: {sum(p.numel() for p in model.parameters())}")
@@ -133,7 +142,8 @@ def get_checkpoint(args, sample_only):
     return model, optimizer, scheduler, step, best_loss
 
 
-def get_latest_checkpoint_artifact(args, verbose=True):
+def get_latest_checkpoint_artifact(args, verbose: bool = True):
+    """Return the highest-version ``model`` artifact logged to the configured W&B run."""
     run = wandb.Api().run(f"{args.wandb_entity}/{args.wandb_project}/{args.load_from_run_id}")
 
     if verbose:
@@ -153,7 +163,15 @@ def get_latest_checkpoint_artifact(args, verbose=True):
     return latest_artifact
 
 
-def save_checkpoint(model, path, optimizer=None, scheduler=None, step=None, best_loss=None):
+def save_checkpoint(
+    model: nn.Module,
+    path: str,
+    optimizer=None,
+    scheduler=None,
+    step: int | None = None,
+    best_loss: float | None = None,
+) -> None:
+    """Save the model (plus any provided optimizer/scheduler/step/best_loss) to ``path``."""
     checkpoint = {"model_state_dict": model.state_dict()}
     if optimizer is not None:
         checkpoint["optimizer_state_dict"] = optimizer.state_dict()
@@ -175,7 +193,7 @@ class NewGELU(nn.Module):
     Reference: Gaussian Error Linear Units (GELU) paper: https://arxiv.org/abs/1606.08415
     """
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return (
             0.5
             * x
@@ -207,7 +225,7 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_ctx_head
         self.n_embd = config.n_embd
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calc query, key, values for all heads in batch; move head forward to batch dim
@@ -231,6 +249,8 @@ class CausalSelfAttention(nn.Module):
 
 
 class CrossAttention(nn.Module):
+    """Multi-head cross-attention from the stroke tokens onto the encoded character context."""
+
     def __init__(self, config):
         super().__init__()
         assert config.n_embd_context % config.n_ctx_head == 0
@@ -243,7 +263,7 @@ class CrossAttention(nn.Module):
         self.n_ctx_head = config.n_ctx_head
         self.n_embd_context = config.n_embd_context
 
-    def forward(self, x, context):
+    def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd_context)
         _, T_ctx, _ = context.size()
 
@@ -296,7 +316,7 @@ class Block(nn.Module):
         m = self.mlp
         self.mlpf = lambda x: m.c_proj(m.act(m.c_fc(x)))  # MLP forward
 
-    def forward(self, x, context=None):
+    def forward(self, x: torch.Tensor, context: torch.Tensor | None = None) -> torch.Tensor:
         x = x + self.attn(self.ln_1(x))
         if self.has_cross_attn:
             assert context is not None, "Expected context"
@@ -329,10 +349,12 @@ class Transformer(nn.Module):
         n_params = sum(p.numel() for p in self.transformer.parameters())
         print(f"Number of Transformer parameters: {n_params:.0f}")
 
-    def get_block_size(self):
+    def get_block_size(self) -> int:
         return self.block_size
 
-    def forward(self, idx, context, targets=None):
+    def forward(
+        self, idx: torch.Tensor, context: torch.Tensor, targets: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         device = idx.device
         _b, t = idx.size()
         assert t <= self.block_size, (

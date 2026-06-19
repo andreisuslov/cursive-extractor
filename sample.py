@@ -71,7 +71,15 @@ def plot_strokes(stroke, title, fig=None, ax=None, figsize=(12, 2), dpi=150, lin
 
 
 @torch.no_grad()
-def generate(model, idx, context, max_new_tokens, temperature=1.0, do_sample=False, top_k=None):
+def generate(
+    model: torch.nn.Module,
+    idx: torch.Tensor,
+    context: torch.Tensor,
+    max_new_tokens: int,
+    temperature: float = 1.0,
+    do_sample: bool = False,
+    top_k: int | None = None,
+) -> torch.Tensor:
     """
     Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
     the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -106,14 +114,15 @@ def generate(model, idx, context, max_new_tokens, temperature=1.0, do_sample=Fal
 def save_samples(
     model,
     dataset,
-    num=2,
-    model_device="cpu",
-    warmup_steps=50,
-    do_sample=False,
-    log_wandb=True,
+    num: int = 2,
+    model_device: str = "cpu",
+    warmup_steps: int = 50,
+    do_sample: bool = False,
+    log_wandb: bool = True,
     params=None,
-):
-    """samples from the model and plots the decoded strokes"""
+) -> None:
+    """Sample ``num`` examples from the model, plot the decoded strokes, and save each
+    as a PNG (optionally logging it to W&B)."""
     model_device = next(model.parameters()).device
     params = params if params else GenerationParams()
 
@@ -153,6 +162,8 @@ def save_samples(
 
 
 def generate_helper_fn(model, dataset, word_list, params):
+    """Generate strokes for ``word_list``: warm-start from a random dataset sample's first
+    word, condition on the words as text, and return ``(ascii_context, offset_sample)``."""
     model_device = next(model.parameters()).device
     warmup_sample_ix = (
         params.warmup_sample_ix
@@ -223,6 +234,9 @@ def generate_helper_fn(model, dataset, word_list, params):
 
 
 def generate_paragraph(model, dataset, text, params, word_list_offsets=None, regenerate_ixs=None):
+    """Generate per-word stroke offsets for the words in ``text`` (``n_at_a_time`` at a
+    time). With ``word_list_offsets`` + ``regenerate_ixs``, only re-generate those word
+    indices (used to fix individual misspelled words). Returns the per-word offsets list."""
     torch.manual_seed(params.seed)  # system inits
     torch.cuda.manual_seed_all(params.seed)
 
@@ -256,6 +270,8 @@ def generate_paragraph(model, dataset, text, params, word_list_offsets=None, reg
 
 
 def word_offsets_to_points(word_offsets, params, word_list=None):  # Add bounds parameters
+    """Lay out per-word stroke offsets into absolute points, advancing the pen along the
+    line and wrapping to a new line past ``params.sentence_line_width``."""
     current_x = current_y = 0
 
     starts_at_bottom = "enaitoshrdx.vpukbgfcymzwlqjS,GJ"
@@ -308,6 +324,7 @@ def plot_paragraph(
     show_indices=False,
     include_title=False,
 ):
+    """Render generated per-word offsets as a single paragraph figure. Returns ``(fig, ax)``."""
     params = params if params else GenerationParams()
     sentence_points = word_offsets_to_points(word_list_offsets, params, word_list=text.split())
     point_samp = np.vstack(sentence_points)
