@@ -52,7 +52,7 @@ CLI::
         [--version N] [--box III] [--min-conf 0.4] [--dpi 600]
 
 With no ``--box`` it segments a default sample of page-4 words and writes the
-colour overlays to ``runs/seg_proto2_<word>.png`` for visual QA.
+colour overlays to ``runs/seg_proto3_<word>.png`` for visual QA.
 """
 
 import argparse
@@ -190,6 +190,93 @@ def restrict_to_word_band(
     band_gray[band_binary > 0] = gray[ty0:ty1, tx0:tx1][band_binary > 0]
     new_box = (left + tx0, top + ty0, left + tx1, top + ty1)
     return band_binary, band_gray, new_box
+
+
+# Fix 3 (layered after the band restriction): clean_word uses a deliberately wide
+# crop (pad_frac >= 0.85) so its vertical-band cut can land INSIDE the crop. On
+# words near the book's centre GUTTER that wide crop also pulls in the dark binding
+# band, and clean_word keeps any component overlapping its generous +-0.12*bw rect,
+# so a same-line neighbour word leaks into the first/last slot. Two pixel/component
+# fixes here, both keyed off facts the cut algorithm cannot recover later:
+#   - BINDING BAND: the gutter band is SOLID (column ink-fill ~0.6-1.0) where
+#     cursive ink is sparse (~0.2); zero contiguous near-vertical dense columns
+#     that reach a crop edge. Pixel-wise (not component-wise) so it also strips a
+#     band traced into the SAME connected component as the word (e.g. *translate*).
+#   - NEIGHBOUR WORD: keep only ink components whose x-range overlaps the TARGET
+#     box (not just clean_word's padded rect), dropping a horizontally-adjacent
+#     word (e.g. the `of` before *savings*) that shares the word's row band.
+BIND_DENSE_FRAC = 0.45  # smoothed column ink-fill >= this -> binding band, not ink
+BIND_MIN_W_FRAC = 0.04  # min binding-run width (and smoothing window) / crop width
+X_KEEP_MARGIN_FRAC = 0.04  # keep components within this * box-width of the box x-span
+
+
+def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Contiguous ``True`` runs of a 1-D bool array as ``(start, end_exclusive)``."""
+    edges = np.flatnonzero(np.diff(np.concatenate(([False], mask, [False])).astype(np.int8)))
+    return list(zip(edges[0::2], edges[1::2], strict=True))
+
+
+def strip_binding_and_neighbors(
+    binary: np.ndarray,
+    gray: np.ndarray,
+    box_2d: list[int],
+    crop_box: tuple[int, int, int, int],
+    page_size: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray, tuple[int, int, int, int]]:
+    """Strip the page-binding gutter band and same-line neighbour words, then
+    re-tighten. Returns ``(binary, gray, crop_box)`` (page px crop_box). See the
+    Fix 3 note above for why each is keyed off density / box-x rather than the cut."""
+    H, W = binary.shape
+    if H == 0 or W == 0 or not binary.any():
+        return binary, gray, crop_box
+    work = binary.copy()
+    wpx, _hpx = page_size
+    sx = wpx / 1000.0
+    bx0 = box_2d[1] * sx - crop_box[0]  # target box x-span in crop px
+    bx1 = box_2d[3] * sx - crop_box[0]
+
+    # (1) binding-band strip: smooth the per-column ink-fill so the band's internal
+    # density dips don't break the run, then zero each dense run that is binding --
+    # i.e. it reaches a crop edge OR sits OUTSIDE the word's box x-span (the gutter
+    # band lives beyond the word). The density gate (cursive ink is sparse) keeps a
+    # real ascender just past the box from being stripped; a split blob whose larger
+    # half reaches neither edge (*pleasure*) is still caught by the outside-box test.
+    col_fill = (work > 0).sum(axis=0).astype(float) / H
+    k = max(9, int(BIND_MIN_W_FRAC * W)) | 1  # odd smoothing window ~ band width
+    kernel = np.ones(k) / k
+    smooth = np.convolve(np.pad(col_fill, k // 2, mode="edge"), kernel, mode="valid")
+    min_w = max(20, int(BIND_MIN_W_FRAC * W))
+    edge_tol = max(2, int(0.01 * W))
+    for s, e in _runs(smooth >= BIND_DENSE_FRAC):
+        if e - s < min_w:
+            continue
+        center = 0.5 * (s + e)
+        if s <= edge_tol or e >= W - edge_tol or center < bx0 or center > bx1:
+            work[:, s:e] = 0
+    if not work.any():  # band-strip ate everything -> keep pre-strip ink
+        work = binary.copy()
+
+    # (2) neighbour-word drop: keep only components x-overlapping the target box.
+    m = X_KEEP_MARGIN_FRAC * max(1.0, bx1 - bx0)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats((work > 0).astype(np.uint8), 8)
+    kept = np.zeros_like(work)
+    for lbl in range(1, n):
+        x, _y, w, _h, area = stats[lbl]
+        if area >= 14 and min(x + w, bx1 + m) > max(x, bx0 - m):
+            kept[labels == lbl] = 255
+    if kept.any():
+        work = kept
+    if not work.any():
+        return binary, gray, crop_box
+
+    ys, xs = np.nonzero(work)
+    tx0, ty0 = int(xs.min()), int(ys.min())
+    tx1, ty1 = int(xs.max()) + 1, int(ys.max()) + 1
+    out_bin = work[ty0:ty1, tx0:tx1]
+    out_gray = np.full((ty1 - ty0, tx1 - tx0), 255, dtype=gray.dtype)
+    out_gray[out_bin > 0] = gray[ty0:ty1, tx0:tx1][out_bin > 0]
+    new_box = (crop_box[0] + tx0, crop_box[1] + ty0, crop_box[0] + tx1, crop_box[1] + ty1)
+    return out_bin, out_gray, new_box
 
 
 # --- Step 2: classify components into BODY vs DIACRITIC ---------------------
@@ -551,9 +638,7 @@ def draw_overlay(
                 leftmost = lx if leftmost is None else min(leftmost, lx)
         ch = word[k] if k < len(word) else "?"
         if leftmost is not None:
-            cv2.putText(
-                img, ch, (leftmost, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2, cv2.LINE_AA
-            )
+            cv2.putText(img, ch, (leftmost, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2, cv2.LINE_AA)
     for bx in boundaries_x:
         x = int(np.rint(bx))
         for y0 in range(0, h, 12):
@@ -589,6 +674,10 @@ def segment_word(
     # Fix 1b: clip residual adjacent-row ink to a tight band around the word's row.
     binary, gray, crop_box = restrict_to_word_band(
         binary, gray, box_2d, crop_box, page_image.size, pitch_px
+    )
+    # Fix 3: strip the centre-gutter binding band + same-line neighbour words.
+    binary, gray, crop_box = strip_binding_and_neighbors(
+        binary, gray, box_2d, crop_box, page_image.size
     )
     h, w = binary.shape
 
@@ -696,7 +785,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--runs-dir",
         default="runs",
-        help="Where to write seg_proto2_<word>.png overlays (sample mode)",
+        help="Where to write seg_proto3_<word>.png overlays (sample mode)",
     )
     return p.parse_args(argv)
 
@@ -720,9 +809,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     pdf_path = _resolve_pdf(args.pdf)
     version = (
-        args.version
-        if args.version is not None
-        else paths.latest_version(pdf_path, args.page)
+        args.version if args.version is not None else paths.latest_version(pdf_path, args.page)
     )
     page_image = render_page(pdf_path, args.page, dpi=args.dpi)
     boxes_path = paths.boxes_json(pdf_path, args.page, version)
@@ -746,8 +833,14 @@ def main(argv: list[str] | None = None) -> None:
         box_2d, out_dir, box_id, word = box_info(index)
         overlay = os.path.join(out_dir, "letters_overlay.png")
         qa = segment_word(
-            page_image, box_2d, word, box_id, out_dir, args.min_conf,
-            pitch_px, overlay_path=overlay,
+            page_image,
+            box_2d,
+            word,
+            box_id,
+            out_dir,
+            args.min_conf,
+            pitch_px,
+            overlay_path=overlay,
         )
         results.append(qa)
         overlays.append(overlay)
@@ -759,10 +852,17 @@ def main(argv: list[str] | None = None) -> None:
             except (IndexError, KeyError):
                 continue
             word = word or expected
-            run_overlay = os.path.join(args.runs_dir, f"seg_proto2_{paths.slugify(word)}.png")
+            run_overlay = os.path.join(args.runs_dir, f"seg_proto3_{paths.slugify(word)}.png")
             qa = segment_word(
-                page_image, box_2d, word, box_id, None, args.min_conf,
-                pitch_px, overlay_path=run_overlay, write_files=False,
+                page_image,
+                box_2d,
+                word,
+                box_id,
+                None,
+                args.min_conf,
+                pitch_px,
+                overlay_path=run_overlay,
+                write_files=False,
             )
             results.append(qa)
             overlays.append(run_overlay)
