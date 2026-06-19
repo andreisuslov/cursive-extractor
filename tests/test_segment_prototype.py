@@ -151,6 +151,67 @@ def test_estimate_slant_gates_flat_horizontal_ink():
     assert prom < sp.SLANT_MIN_PROM or s == 0.0
 
 
+def test_reject_noise_drops_speck_keeps_letters():
+    # two thin letter strokes + a 3x3 speck: the stroke-width-aware floor drops the
+    # speck (sub-letter) and keeps both strokes, so a speck is never a cut landmark.
+    b = np.zeros((60, 120), np.uint8)
+    b[10:50, 20:24] = 255  # stroke 1
+    b[10:50, 60:64] = 255  # stroke 2
+    b[2:5, 100:103] = 255  # 3x3 speck (area 9, below the floor)
+    out, _g, changed = sp.reject_noise(b, b.copy())
+    assert changed
+    assert out.sum() == b[:, :80].sum()  # only the two strokes survive (speck removed)
+
+
+def test_reject_noise_keeps_real_diacritic():
+    # an i-dot sized blob (~5*stroke_width^2) sits ABOVE the floor and is kept.
+    b = np.zeros((60, 80), np.uint8)
+    b[10:50, 30:34] = 255  # a stem (stroke width ~4)
+    b[3:9, 31:37] = 255  # a 6x6 dot (area 36 ~ 2.3*stroke_width^2, a real diacritic)
+    out, _g, changed = sp.reject_noise(b, b.copy())
+    assert not changed  # nothing dropped: the dot is above the speck floor
+    assert out.sum() == b.sum()
+
+
+def test_local_slope_returns_fallback_when_unreliable():
+    # an empty window has no near-vertical ink -> keep the global slant (fallback).
+    b = np.zeros((40, 60), np.uint8)
+    assert sp._local_slope(b, 30.0, 12.0, -0.4) == -0.4
+
+
+def test_local_slope_finds_local_stem_lean():
+    # a window over a stem leaning tan=-0.3 returns that LOCAL angle, not the fallback.
+    b = np.zeros((60, 80), np.uint8)
+    for y in range(8, 52):
+        x = round(40 - 0.3 * y)
+        b[y, x - 1 : x + 2] = 255
+    s = sp._local_slope(b, 30.0, 40.0, 0.0)  # fallback 0; the stem must override it
+    assert abs(s - (-0.3)) < 0.1
+
+
+def test_carve_seam_bends_around_an_ink_bar():
+    # a straight preferred line runs through a vertical ink bar; the min-ink seam must
+    # bend AROUND the bar (the descender-routing the global straight cut cannot do),
+    # while riding the line where there is no ink.
+    ink = np.zeros((40, 60), dtype=float)
+    ink[10:30, 28:33] = 1.0  # the bar to route around
+    pref = np.full(40, 30.0)
+    cut = sp._carve_seam(ink, pref, band=12)
+    assert np.all((cut[10:30] < 28) | (cut[10:30] >= 33))  # routed off the bar
+    assert abs(cut[0] - 30) <= 3  # rides the preferred line away from the bar
+
+
+def test_slice_by_seams_assigns_by_curved_boundary():
+    # a BENT seam (jumps right at row 5): the same x lands in different slots by row --
+    # exactly what a straight global-slant line cannot express.
+    seams = np.array([[5] * 5 + [15] * 5])  # one boundary, bent
+    groups = sp.slice_by_seams([[(8, 2), (8, 7)]], seams, n_slots=2)
+    g0 = [(p[0], p[1]) for sub in groups[0] for p in sub]
+    g1 = [(p[0], p[1]) for sub in groups[1] for p in sub]
+    assert (8.0, 2.0) in g1  # row 2: 8 >= seam(5) -> right slot
+    assert (8.0, 7.0) in g0  # row 7: 8 <  seam(15) -> left slot
+
+
 def test_ensure_count_x_forces_exact_distinct_count():
     assert sp._ensure_count_x([20.0, 20.0, 80.0], 3, 0.0, 100.0) == sorted(
         sp._ensure_count_x([20.0, 20.0, 80.0], 3, 0.0, 100.0)

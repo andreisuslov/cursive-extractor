@@ -75,7 +75,7 @@ import numpy as np
 from pdf2image import convert_from_path
 
 from . import paths, vectorize
-from .config import PDF_PATH
+from .config import PDF_PATH, PDF_RENDER_FALLBACK
 
 # --- tunables (Step 3 cut-score weights + Step 5 DP) ------------------------
 W_THIN = 0.45  # thin ink column (a join between letters, not a stem)
@@ -140,8 +140,13 @@ def render_page(pdf_path: str, page: int, dpi: int = 600):
 
     The diary PDF has dozens of pages; ``pdf_utils.load_page`` renders them all,
     so here we render only the page we need via ``first_page``/``last_page``.
+
+    ``pdf_path`` is the SLUG anchor and may be absent (the slug PDF is git-ignored);
+    when it is, render from the real ``PDF_RENDER_FALLBACK`` diary PDF so the CLI/eval
+    work out of the box with no manual symlink (see ``config.PDF_PATH``).
     """
-    return convert_from_path(pdf_path, dpi=dpi, first_page=page, last_page=page)[0]
+    src = pdf_path if os.path.exists(pdf_path) else PDF_RENDER_FALLBACK
+    return convert_from_path(src, dpi=dpi, first_page=page, last_page=page)[0]
 
 
 # Central-band geometry (Fix 1, layered on clean_word). The diary's ruled rows
@@ -341,6 +346,53 @@ def strip_binding_and_neighbors(
     out_gray[out_bin > 0] = gray[ty0:ty1, tx0:tx1][out_bin > 0]
     new_box = (crop_box[0] + tx0, crop_box[1] + ty0, crop_box[0] + tx1, crop_box[1] + ty1)
     return out_bin, out_gray, new_box
+
+
+# --- Step 1c: reject speck noise --------------------------------------------
+# After clean_word + band + ruled-line + binding/neighbour strips, a few crops still
+# carry sub-letter SPECKS -- a clipped neighbour-row tip, a scan fleck, a ligature
+# crumb -- that are not part of the word. Left in the mask they shift the slant
+# estimate and the per-column cut profile (a false cut landmark), and trace them as a
+# spurious letter. We drop only components below a stroke-width-aware SPECK floor,
+# which sits safely BELOW a real diacritic: an i-dot / t-cross / comma here is
+# ~5*stroke_width^2 (~150-280 px on these scans) while a speck is sub-stroke
+# (<~60 px), so the floor at ``NOISE_SPECK_K * stroke_width^2`` keeps every real mark.
+# We do NOT try to drop letter-SIZED strays (a next-word edge sliver, a row-bleed
+# fragment): on this dense page a real first/last letter is the same size and at the
+# same crop edge, so size/position cannot tell them apart without recognition.
+# ponytail: speck-floor only; letter-sized neighbour bleed needs a recognition-guided
+# cut, not a geometry rule (which here would eat real edge letters -- *into*, *refer*).
+NOISE_SPECK_K = 2.0  # speck floor = this * stroke_width^2 (below a diacritic's ~5*sw^2)
+NOISE_SPECK_MIN = 14  # ...but never below this absolute area (clean low-DPI inputs)
+
+
+def reject_noise(binary: np.ndarray, gray: np.ndarray) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Drop sub-letter speck components, then re-tighten. Returns
+    ``(binary, gray, changed)``. The floor is stroke-width-aware (see module note) so
+    it removes specks/artifacts while keeping every real letter and diacritic."""
+    H, W = binary.shape
+    if H == 0 or W == 0 or not binary.any():
+        return binary, gray, False
+    dt = cv2.distanceTransform((binary > 0).astype(np.uint8), cv2.DIST_L2, 5)[binary > 0]
+    sw = 2.0 * float(np.median(dt)) if dt.size else 0.0
+    floor = max(NOISE_SPECK_MIN, round(NOISE_SPECK_K * sw * sw))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats((binary > 0).astype(np.uint8), 8)
+    keep = np.zeros_like(binary)
+    dropped = False
+    for lbl in range(1, n):
+        if stats[lbl, cv2.CC_STAT_AREA] < floor:
+            dropped = True
+            continue
+        keep[labels == lbl] = 255
+    if not dropped or not keep.any():
+        return binary, gray, False
+
+    ys, xs = np.nonzero(keep)
+    tx0, ty0, tx1, ty1 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+    out_bin = keep[ty0:ty1, tx0:tx1]
+    out_gray = np.full((ty1 - ty0, tx1 - tx0), 255, dtype=gray.dtype)
+    out_gray[out_bin > 0] = gray[ty0:ty1, tx0:tx1][out_bin > 0]
+    return out_bin, out_gray, True
 
 
 # --- Step 2: classify components into BODY vs DIACRITIC ---------------------
@@ -603,6 +655,124 @@ def estimate_slant(binary: np.ndarray) -> tuple[float, float]:
     return s_best, prom
 
 
+# --- Step 3d: per-boundary cut seams (local angle + optional bending) --------
+# The global de-shear (3c) puts ONE slant on the whole word; on words whose own
+# descenders/ascenders inflate the slant objective it over-fits (e.g. *pleasure*
+# -> tan -0.72, clipping the p). So we use the global slant only to PLACE the
+# boundary x-columns (the DP, which works), then cut each boundary along a LOCAL
+# angle measured from the near-vertical ink beside it, and let that cut BEND through
+# the lowest-ink path so it routes AROUND a descender loop instead of slicing it.
+# Two fallbacks keep words the global slant already handled untouched: an unreliable
+# local angle (a between-letter connector / clean gap) reuses the global slant, and a
+# clean pen-gap has no ink to route around so the seam stays on its straight slant line.
+SEAM_SLOPE_FRAC = 0.90  # local-slant window half-width / one letter-width (spans adjacent stems)
+SEAM_BAND_FRAC = 0.42  # seam may bend this * one letter-width either side of its slant line
+SEAM_LOCAL_PROM = 0.10  # min local-window deslant prominence to trust (else use the global slant)
+SEAM_W_INK = 1.0  # seam cost per ink pixel crossed (the dominant term)
+SEAM_W_DEV = 0.004  # seam cost per px of straying from its slant line (anchors it near bx)
+SEAM_W_CURV = 0.03  # seam cost per px of row-to-row bend (keeps it a smooth path)
+
+
+def _local_slope(binary: np.ndarray, ox: float, half_w: float, fallback_s: float) -> float:
+    """Local cut angle at original-x ``ox``: the deslant of a window spanning the
+    adjacent letter STEMS (``+-half_w`` px), via the same run-length objective as the
+    global ``estimate_slant``. The window must lean past the boundary's connector to
+    the stems on either side -- a between-letter strip alone is horizontal and gives no
+    angle. Returns ``fallback_s`` (the global slant) when the window deslant is
+    unreliable, so a word the global slant already fits is not disturbed; returns the
+    LOCAL angle where it is reliable, so a word whose slant varies along it (steep
+    ascenders left, upright letters right -- e.g. *pleasure*) is cut per-region rather
+    than at one over-fit global angle."""
+    w = binary.shape[1]
+    x0, x1 = max(0, int(ox - half_w)), min(w, int(ox + half_w))
+    if x1 - x0 < 4:
+        return fallback_s
+    s, prom = estimate_slant(binary[:, x0:x1])
+    if prom < SEAM_LOCAL_PROM:
+        return fallback_s
+    return s if SLANT_TAN_MIN <= s <= SLANT_TAN_MAX else fallback_s
+
+
+def _l1_envelope(prev: np.ndarray, c: float) -> tuple[np.ndarray, np.ndarray]:
+    """Lower envelope of ``prev`` under an L1 (``c`` per step) transition: returns
+    ``m[k] = min_j prev[j] + c*|k-j|`` and the argmin index ``bp[k]`` (the seam's
+    smoothness step). Two linear passes."""
+    n = prev.size
+    m = prev.astype(float).copy()
+    bp = np.arange(n)
+    for i in range(1, n):
+        if m[i - 1] + c < m[i]:
+            m[i], bp[i] = m[i - 1] + c, bp[i - 1]
+    for i in range(n - 2, -1, -1):
+        if m[i + 1] + c < m[i]:
+            m[i], bp[i] = m[i + 1] + c, bp[i + 1]
+    return m, bp
+
+
+def _carve_seam(ink: np.ndarray, pref_x: np.ndarray, band: int) -> np.ndarray:
+    """Min-cost vertical seam ``x(y)`` within +-``band`` px of the slant line
+    ``pref_x(y)``: cost = ink crossed + deviation from the line + row-to-row bend.
+    Returns the integer cut x per row. A clean gap -> the seam rides ``pref_x``; ink in
+    the way -> it bends through the nearest low-ink path (around a descender)."""
+    h, w = ink.shape
+    D = np.arange(-band, band + 1)
+    base = np.clip(np.rint(pref_x).astype(int), 0, w - 1)
+    cols = np.clip(base[:, None] + D[None, :], 0, w - 1)  # (h, nd)
+    emis = SEAM_W_INK * ink[np.arange(h)[:, None], cols] + SEAM_W_DEV * np.abs(D)[None, :]
+    dp = np.empty_like(emis)
+    back = np.zeros(emis.shape, dtype=np.int32)
+    dp[0] = emis[0]
+    for y in range(1, h):
+        m, bp = _l1_envelope(dp[y - 1], SEAM_W_CURV)
+        dp[y], back[y] = emis[y] + m, bp
+    cut = np.empty(h, dtype=int)
+    k = int(dp[-1].argmin())
+    for y in range(h - 1, -1, -1):
+        cut[y] = int(np.clip(base[y] + D[k], 0, w - 1))
+        if y > 0:
+            k = int(back[y, k])
+    return cut
+
+
+def build_cut_seams(
+    binary: np.ndarray,
+    bxs: list[float],
+    shift: np.ndarray,
+    s_slant: float,
+    x_min: float,
+    x_max: float,
+    n_slots: int,
+) -> np.ndarray:
+    """One cut seam per boundary in ORIGINAL image coords, sorted left-to-right and
+    forced non-crossing. ``bxs`` are de-sheared boundary x; the global slant line for
+    boundary ``b`` is ``b - shift[y]`` (de-shear inverse). Each seam follows the LOCAL
+    angle when reliable (else the global slant) and bends through low ink."""
+    h, _w = binary.shape
+    ink = (binary > 0).astype(float)
+    rows = np.arange(h)
+    yr = np.nonzero(ink.any(axis=1))[0]
+    y_ref = int((yr.min() + yr.max()) // 2) if yr.size else h // 2
+    letter_w = max(8.0, (x_max - x_min) / max(1, n_slots))
+    slope_half = SEAM_SLOPE_FRAC * letter_w
+    band = max(3, round(SEAM_BAND_FRAC * letter_w))
+
+    seams: list[np.ndarray] = []
+    prev_cut: np.ndarray | None = None
+    for b in sorted(bxs):
+        g = b - shift[rows].astype(float)  # global-slant line (original space)
+        ox = b - float(shift[y_ref])  # boundary x in the original image at the mid row
+        s_loc = _local_slope(binary, ox, slope_half, s_slant)
+        # reliable local angle -> re-anchor the cut line at y_ref with it; else the
+        # global-slant line g (unchanged, so global-good words don't move).
+        pref = g if s_loc == s_slant else ox + s_loc * (rows - y_ref).astype(float)
+        cut = _carve_seam(ink, pref, band)
+        if prev_cut is not None:
+            cut = np.maximum(cut, prev_cut + 1)  # keep seams ordered, non-crossing
+        prev_cut = cut
+        seams.append(cut)
+    return np.asarray(seams) if seams else np.empty((0, h), dtype=int)
+
+
 def grid_candidates(
     score: np.ndarray, x_min: float, x_max: float, max_cand: int = GRID_MAX_CAND
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -763,6 +933,53 @@ def attach_diacritics_x(
     return groups
 
 
+def _seam_slot(seams: np.ndarray, x: float, y: int, n_slots: int) -> int:
+    """Slot of point ``(x, y)`` = the number of cut seams it lies to the right of at
+    row ``y`` (seams are sorted ascending per row), clipped to the last slot."""
+    yy = int(np.clip(y, 0, seams.shape[1] - 1))
+    return min(int(np.searchsorted(seams[:, yy], x, side="right")), n_slots - 1)
+
+
+def slice_by_seams(
+    body: list[list[tuple[int, int]]], seams: np.ndarray, n_slots: int
+) -> list[list[np.ndarray]]:
+    """Assign every body point to a slot by which side of each per-boundary cut SEAM
+    it falls on (a local-angle, possibly-bent cut), grouping consecutive same-slot
+    points of each traced stroke into a contiguous sub-stroke. Generalises
+    ``slice_by_x`` from straight global-slant lines to per-boundary seams."""
+    groups: list[list[np.ndarray]] = [[] for _ in range(n_slots)]
+    for stroke in body:
+        cur_slot: int | None = None
+        cur: list[tuple[int, int]] = []
+        for px, py in stroke:
+            slot = _seam_slot(seams, px, round(py), n_slots)
+            if cur_slot is None:
+                cur_slot = slot
+            if slot != cur_slot:
+                if cur:
+                    groups[cur_slot].append(np.asarray(cur, dtype=float))
+                cur, cur_slot = [], slot
+            cur.append((px, py))
+        if cur and cur_slot is not None:
+            groups[cur_slot].append(np.asarray(cur, dtype=float))
+    return groups
+
+
+def attach_diacritics_seams(
+    groups: list[list[np.ndarray]],
+    seams: np.ndarray,
+    diacritics: list[list[tuple[int, int]]],
+    n_slots: int,
+) -> list[list[np.ndarray]]:
+    """Attach each diacritic to the slot its centre falls in, by the cut seams."""
+    for d in diacritics:
+        dx0, _dy0, dx1, _dy1 = _stroke_bbox(d)
+        yc = round(sum(p[1] for p in d) / len(d))
+        slot = _seam_slot(seams, 0.5 * (dx0 + dx1), yc, n_slots)
+        groups[slot].append(np.asarray(d, dtype=float))
+    return groups
+
+
 # --- Step 7/8: emit per-letter files + confidence + overlay -----------------
 
 
@@ -856,12 +1073,13 @@ def draw_overlay(
     boundaries_x: list[float],
     lw: int = 3,
     shift: np.ndarray | None = None,
+    seams: np.ndarray | None = None,
 ) -> np.ndarray:
     """Colour overlay: faded ink background, one colour per letter slot, a dashed
-    boundary line at each cut, and the slot char labelled above it. ``boundaries_x``
-    are in DE-SHEARED column space; with ``shift`` given they are drawn back as the
-    SLANTED lines they represent in the original image (``x = bx - shift[y]``),
-    otherwise as plain vertical lines."""
+    boundary at each cut, and the slot char labelled above it. With ``seams`` given,
+    the dashed boundaries follow the actual per-row cut PATHS (local-angle / bent
+    seams); otherwise ``boundaries_x`` are drawn as the global-slant lines implied by
+    ``shift`` (``x = bx - shift[y]``), or plain vertical lines when ``shift`` is None."""
     img = _fade(gray)
     h = img.shape[0]
     for k, substrokes in enumerate(groups):
@@ -879,6 +1097,16 @@ def draw_overlay(
         ch = word[k] if k < len(word) else "?"
         if leftmost is not None:
             cv2.putText(img, ch, (leftmost, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2, cv2.LINE_AA)
+
+    if seams is not None and len(seams):
+        for cut in seams:
+            for y0 in range(0, h, 12):
+                y1 = min(h - 1, y0 + 6)
+                p0 = (int(cut[min(y0, len(cut) - 1)]), y0)
+                p1 = (int(cut[min(y1, len(cut) - 1)]), y1)
+                cv2.line(img, p0, p1, (40, 40, 40), 1, cv2.LINE_AA)
+        return img
+
     n = len(shift) if shift is not None else 0
 
     def _orig_x(bx: float, y: int) -> int:
@@ -930,6 +1158,9 @@ def segment_word(
     binary, gray, crop_box = strip_binding_and_neighbors(
         binary, gray, box_2d, crop_box, page_image.size
     )
+    # Step 1c: reject stray noise (clipped neighbour-row tips / next-word slivers) so
+    # it is never a letter, a slant landmark, or a false cut column.
+    binary, gray, _ = reject_noise(binary, gray)
     h, w = binary.shape
 
     strokes = vectorize.trace_ink(binary)
@@ -960,7 +1191,6 @@ def segment_word(
     shift = _shear_shifts(h, s_slant)
     sbin = _shear_binary(binary, shift) if s_slant else binary
     body_s = _shear_points(body, shift) if s_slant else body
-    diac_s = _shear_points(diacritics, shift) if s_slant else diacritics
 
     body_pts = np.concatenate([np.asarray(p, dtype=float) for p in body_s])
     x_min, x_max = float(body_pts[:, 0].min()), float(body_pts[:, 0].max())
@@ -993,9 +1223,12 @@ def segment_word(
         score = topology_cut_score(sbin, x_min, x_max)
         bxs = cuts_for(score)
 
-    groups_s = slice_by_x(body_s, bxs, L)  # Step 6 (in de-sheared x-space)
-    groups_s = attach_diacritics_x(groups_s, bxs, diac_s, L)
-    groups = _unshear_groups(groups_s, shift) if s_slant else groups_s  # back to original
+    # Step 6: cut each boundary along its LOCAL angle, bending through low ink, in the
+    # ORIGINAL image (not the single global shear) -- then slice the original points by
+    # those seams. The DP's de-sheared bxs still set WHERE each boundary sits.
+    seams = build_cut_seams(binary, bxs, shift, s_slant, x_min, x_max, L)
+    groups = slice_by_seams(body, seams, L)
+    groups = attach_diacritics_seams(groups, seams, diacritics, L)
 
     n_free = sum(1 for bx in bxs if col[int(np.clip(round(bx), 0, sw - 1))] == 0)
     n_internal = len(bxs) - n_free
@@ -1006,7 +1239,7 @@ def segment_word(
 
     if overlay_path:
         paths.ensure_parent(overlay_path)
-        cv2.imwrite(overlay_path, draw_overlay(gray, groups, word, bxs, shift=shift))
+        cv2.imwrite(overlay_path, draw_overlay(gray, groups, word, bxs, shift=shift, seams=seams))
     if write_files and out_dir:
         emit_letter_files(groups, word, (h, w), box_id, boundary_fracs, conf, low_conf, out_dir)
 

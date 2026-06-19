@@ -18,7 +18,17 @@ def _env_bool(name: str, default: bool = True) -> bool:
 
 # --- Paths ---
 # Run the CLIs from the repo root; this default is relative to it.
+#
+# PDF_PATH is the SLUG anchor: the stored page-4 box data lives under
+# ``outputs/test_document/`` and its filenames carry the ``test_document`` slug, so
+# this path must keep that basename for box lookups to resolve. The slug PDF itself
+# is git-ignored and usually absent. The real, renderable diary PDF lives in
+# ``outputs/`` -- PDF_RENDER_FALLBACK points at it so a missing slug PDF renders
+# from there (no manual symlink needed). Override either via env.
 PDF_PATH = os.environ.get("OCR_PDF_PATH", "data/content/test_document.pdf")
+PDF_RENDER_FALLBACK = os.environ.get(
+    "OCR_PDF_RENDER_FALLBACK", "outputs/diary_partial_pages_1-4.pdf"
+)
 
 # Output layout (root, per-PDF/per-page folders, filenames) lives in ocr/paths.py.
 
