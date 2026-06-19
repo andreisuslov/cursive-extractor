@@ -73,7 +73,7 @@ DESC_SIZE = 24  # descriptor canvas side (px)
 DESC_BLUR = 1.2  # gaussian sigma for the descriptor (tolerates small shape variance)
 
 # --- forced-alignment DP weights -------------------------------------------
-ALIGN_ALPHA = 1.0  # weight on the recognition (emission) score
+ALIGN_ALPHA = 1.5  # recognition weight; page-4 sweep peaks at 1.5 (30/74), 3.0 regresses
 ALIGN_BETA = 0.35  # weight on the geometry cut-score at each chosen boundary
 ALIGN_LAMBDA = 0.8  # weight on the squared width-prior residual (regulariser)
 ALIGN_MAX_CAND = 56  # cap candidate columns so the O(L * n^2) DP stays small
@@ -375,12 +375,14 @@ def geometry_boundaries(prep: dict, word: str) -> tuple[list[float], np.ndarray]
     return bxs, score
 
 
-def recognition_boundaries(prep: dict, word: str, geom_score: np.ndarray) -> list[float]:
+def recognition_boundaries(
+    prep: dict, word: str, geom_score: np.ndarray, alpha: float = ALIGN_ALPHA
+) -> list[float]:
     """Recognition-guided cut: forced alignment over candidate columns, geometry +
     width prior blended in. Falls back to geometry candidates for the column grid."""
     sbin, x_min, x_max = prep["sbin"], prep["x_min"], prep["x_max"]
     cand_x, _ = sp.grid_candidates(geom_score, x_min, x_max)
-    return align_boundaries(sbin, word, x_min, x_max, cand_x, geom_score)
+    return align_boundaries(sbin, word, x_min, x_max, cand_x, geom_score, alpha=alpha)
 
 
 # --- 4. measurement ---------------------------------------------------------
@@ -417,7 +419,9 @@ def recognition_accuracy(prep: dict, word: str, boundaries: list[float]) -> dict
     }
 
 
-def evaluate_word(page_image, box_2d, word, pitch_px, overlay_dir=None) -> dict | None:
+def evaluate_word(
+    page_image, box_2d, word, pitch_px, overlay_dir=None, alpha: float = ALIGN_ALPHA
+) -> dict | None:
     """Cut one word both ways and measure. Optionally writes geometry/recognition
     overlays for visual QA."""
     word = word.strip()
@@ -425,7 +429,7 @@ def evaluate_word(page_image, box_2d, word, pitch_px, overlay_dir=None) -> dict 
     if prep is None or len(word) < 2:
         return None
     geo_bxs, geom_score = geometry_boundaries(prep, word)
-    rec_bxs = recognition_boundaries(prep, word, geom_score)
+    rec_bxs = recognition_boundaries(prep, word, geom_score, alpha=alpha)
     geo = recognition_accuracy(prep, word, geo_bxs)
     rec = recognition_accuracy(prep, word, rec_bxs)
     conf = sp.compute_confidence(geom_score, geo_bxs, word, prep["x_min"], prep["x_max"])
@@ -480,6 +484,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--dpi", type=int, default=600, help="Render DPI for the source page")
     p.add_argument("--overlay-dir", default="runs/recog", help="Where to write geo/rec overlays")
     p.add_argument("--no-overlays", action="store_true", help="Skip writing overlay PNGs")
+    p.add_argument(
+        "--alpha",
+        type=float,
+        default=ALIGN_ALPHA,
+        help="Forced-alignment recognition (emission) weight",
+    )
     return p.parse_args(argv)
 
 
@@ -503,7 +513,9 @@ def main(argv: list[str] | None = None) -> None:
         except (IndexError, KeyError):
             continue
         try:
-            r = evaluate_word(page_image, entry["box_2d"], word or expected, pitch_px, overlay_dir)
+            r = evaluate_word(
+                page_image, entry["box_2d"], word or expected, pitch_px, overlay_dir, args.alpha
+            )
         except Exception as e:  # eval CLI: report the word and keep going
             print(f"  {word}: ERROR {type(e).__name__}: {e}")
             r = None
