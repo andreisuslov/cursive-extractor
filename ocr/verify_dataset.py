@@ -6,15 +6,14 @@ Handles the two coordinate conventions produced by this pipeline:
     page (0-1 of page width/height). This is what the browser capture tool and
     Gemini stroke tracing produce.
   * ``--coords box``: points are normalized within each word's crop and placed
-    using the entry's ``box_2d``. This is what ``ocr.vectorize`` produces, so its
-    output (``*_with_vectors.json``) must be verified in this mode.
+    using the entry's ``box_2d``. This is what ``ocr.vectorize`` produces (the
+    canonical ``*_strokes.json``), so its output must be verified in this mode.
 
 Other options: ``--index`` to draw a single entry, ``--crop`` to crop the output
 to the drawn strokes (handy with ``--index``), ``--save`` / ``--show``.
 
     python -m ocr.verify_dataset --dataset data/content/handwriting_dataset_precise.json --page 2
-    python -m ocr.verify_dataset --dataset data/content/bbox_data/page_2_data_with_vectors.json \\
-        --coords box --page 2 --save overlay.jpg
+    python -m ocr.verify_dataset --coords box --page 4 --save overlay.jpg
 """
 
 import argparse

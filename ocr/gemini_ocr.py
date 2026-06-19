@@ -300,7 +300,10 @@ def extract_with_fallback(model, pil_image, fallback_model_name=None, transcript
 
 
 def draw_boxes_on_image(pil_image, word_data):
-    """Draw the OCR bounding boxes onto a copy-safe image (in place)."""
+    """Draw the OCR bounding boxes onto ``pil_image`` in place; returns it.
+
+    Mutates the image, so callers that need the original should pass a copy.
+    """
     draw = ImageDraw.Draw(pil_image)
     width, height = pil_image.size
     for item in word_data:

@@ -7,6 +7,15 @@ document that already lives in ``data/content/``.
 
 import os
 
+# Strings that count as "off" for a boolean env flag (anything else is "on").
+_FALSEY = ("0", "false", "False", "")
+
+
+def _env_bool(name, default=True):
+    """Read a boolean flag from the environment; 0/false/empty means off."""
+    return os.environ.get(name, "1" if default else "0") not in _FALSEY
+
+
 # --- Paths ---
 # Run the CLIs from the repo root; this default is relative to it.
 PDF_PATH = os.environ.get("OCR_PDF_PATH", "data/content/test_document.pdf")
@@ -22,11 +31,11 @@ CROP_PADDING = int(os.environ.get("OCR_CROP_PADDING", "10"))
 CROP_PAD_FRAC = float(os.environ.get("OCR_CROP_PAD_FRAC", "0.12"))
 # After padding, grow the box until no ink touches its borders (no clipped
 # strokes). Vectorize and package_boxes MUST agree on this so overlays align.
-CROP_FIT_INK = os.environ.get("OCR_CROP_FIT_INK", "1") not in ("0", "false", "False", "")
+CROP_FIT_INK = _env_bool("OCR_CROP_FIT_INK")
 # Clean each word crop before vectorizing: strip ruled lines / scan-edge bands and
 # keep only the target word's ink (drop neighbouring words/lines). See
 # vectorize.clean_word. Disable with OCR_CROP_CLEAN=0.
-CROP_CLEAN = os.environ.get("OCR_CROP_CLEAN", "1") not in ("0", "false", "False", "")
+CROP_CLEAN = _env_bool("OCR_CROP_CLEAN")
 
 # The HTML template ships alongside this package.
 HTML_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "handwriting_tool.html")

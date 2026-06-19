@@ -24,6 +24,8 @@ def _estimate(prev, nxt, k, span):
 
 
 def _infill(result):
+    """Fill every ``box_2d is None`` entry in place by interpolating from the
+    nearest boxed neighbours, mark it ``estimated``, and return how many were filled."""
     n, count = len(result), 0
     for idx in range(n):
         if result[idx]["box_2d"] is not None:
