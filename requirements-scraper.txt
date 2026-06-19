@@ -1,0 +1,10 @@
+# Dependencies for scrape_diary.py -- the upstream source-fetcher that downloads
+# American Diary Project pages into a PDF (the raw input for the OCR pipeline).
+# Kept separate from requirements.txt (training) and ocr/requirements.txt (OCR
+# pipeline) because it pulls in a headless browser stack. Also requires Google
+# Chrome to be installed; webdriver-manager fetches a matching chromedriver at run time.
+#
+#   pip install -r requirements-scraper.txt
+selenium>=4.16.0
+webdriver-manager>=4.0.1
+requests>=2.32.0

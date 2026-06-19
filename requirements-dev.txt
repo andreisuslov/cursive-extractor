@@ -1,0 +1,9 @@
+# Developer tooling for local work: the test suite and the linter/formatter.
+# See the "Local development" section of README.md. Install alongside the runtime deps:
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   python3 -m pytest -q        # 61 tests
+#   python3 -m ruff check .     # lint
+#   python3 -m ruff format      # format
+pytest>=8.4.0
+ruff>=0.15.0

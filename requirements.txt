@@ -1,5 +1,13 @@
+# Training + sampling deps (train.py / sample.py / scripts/train_local.py).
+# Sibling requirement files (a fresh clone may need several):
+#   requirements-dev.txt       -- pytest + ruff (tests, lint/format)
+#   ocr/requirements.txt       -- the scanned-PDF OCR pipeline (needs system poppler)
+#   requirements-scraper.txt   -- scrape_diary.py (headless-browser diary fetcher)
 torch>=2.4.0
 wandb>=0.17.7
 numpy>=2.1.0
+# scipy is used by the Colab/Jupyter notebooks (scipy.signal.savgol_filter,
+# scipy.ndimage.rotate), not by the .py modules -- so the local .py workflow
+# (tests, smoke, train_local) runs without it. Kept here for the notebook path.
 scipy>=1.14.1
 matplotlib>=3.9.2
