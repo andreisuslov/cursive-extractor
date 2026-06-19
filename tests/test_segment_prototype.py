@@ -158,3 +158,33 @@ def test_ensure_count_x_forces_exact_distinct_count():
     out = sp._ensure_count_x([20.0, 20.0, 80.0], 3, 0.0, 100.0)
     assert len(out) == 3 and len(set(out)) == 3
     assert all(0.0 < b < 100.0 for b in out)
+
+
+# A box_2d 200px wide on a 1000px page -> morph-open kernel ~120px; the line spans
+# the whole 400px crop and is removed, the narrow word stems survive.
+_RULE_BOX = [0, 100, 100, 300]  # ymin, xmin, ymax, xmax (0-1000 scale)
+_RULE_PAGE = (1000, 200)
+
+
+def _word_with_rule(rule_row_frac: float) -> np.ndarray:
+    """A binary with three narrow vertical stems and one wide horizontal bar whose
+    ink fill spans ``rule_row_frac`` of the width."""
+    b = np.zeros((60, 400), np.uint8)
+    for x in (60, 160, 260):  # word stems (narrow, kept)
+        b[5:45, x : x + 4] = 255
+    b[50:53, : int(rule_row_frac * 400)] = 255  # horizontal bar (the rule)
+    return b
+
+
+def test_strip_ruled_line_removes_full_width_rule():
+    b = _word_with_rule(1.0)
+    out = sp.strip_ruled_line(b, _RULE_BOX, (0, 0, 400, 60), _RULE_PAGE)
+    assert out[50:53, :].sum() == 0  # the edge-to-edge rule is gone
+    assert out[5:45, 60:64].any() and out[5:45, 260:264].any()  # word stems survive
+
+
+def test_strip_ruled_line_noop_below_rowfrac_gate():
+    # a 0.90-full row mimics translate's wavy baseline: below the 0.97 gate -> untouched
+    b = _word_with_rule(0.90)
+    out = sp.strip_ruled_line(b, _RULE_BOX, (0, 0, 400, 60), _RULE_PAGE)
+    assert np.array_equal(out, b)

@@ -220,11 +220,64 @@ BIND_DENSE_FRAC = 0.45  # smoothed column ink-fill >= this -> binding band, not 
 BIND_MIN_W_FRAC = 0.04  # min binding-run width (and smoothing window) / crop width
 X_KEEP_MARGIN_FRAC = 0.04  # keep components within this * box-width of the box x-span
 
+# Horizontal ruled-line removal (Fix 4, found at scale on the page's BOTTOM row).
+# A page rule (or scan-band edge) runs edge-to-edge through the crop; clean_word's
+# content-aware fit then over-grows the crop to the line's full width (the bottom-row
+# words *and* / *valuing* / *you.* grew to 2.7-2.8x their detection box) and, worse,
+# the line BRIDGES the target word to its same-line neighbours into ONE component, so
+# the neighbour-drop below cannot separate them. We isolate the line by a wide
+# horizontal morphological OPEN (only a run >= RULE_KFRAC * box-width survives -- a
+# real rule, never a short cursive horizontal) and subtract it, which also severs the
+# bridge so the existing neighbour-drop then removes the neighbour on its own.
+# GATE: a single image row reaches >= RULE_ROWFRAC ink fill. A straight edge-to-edge
+# rule fills one whole row (the 3 bottom-row crops hit 1.00); the densest non-rule on
+# this page, *translate*'s wavy cursive baseline, only reaches 0.94 -- so this is a
+# strict no-op on translate and every other word, gating on the rule's defining shape
+# (one full straight row) rather than on crop width (which is large pre-tighten for
+# any word clean_word over-grew).
+RULE_ROWFRAC = 0.97  # a row this full of ink == an edge-to-edge rule (translate: 0.94)
+RULE_KFRAC = 0.5  # morph-open kernel width / box-width (min horizontal run = a rule)
+RULE_KMIN = 120  # ...but never shorter than this many px (a rule is long)
+
 
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     """Contiguous ``True`` runs of a 1-D bool array as ``(start, end_exclusive)``."""
     edges = np.flatnonzero(np.diff(np.concatenate(([False], mask, [False])).astype(np.int8)))
     return list(zip(edges[0::2], edges[1::2], strict=True))
+
+
+def strip_ruled_line(
+    binary: np.ndarray,
+    box_2d: list[int],
+    crop_box: tuple[int, int, int, int],
+    page_size: tuple[int, int],
+) -> np.ndarray:
+    """Zero a horizontal page rule from ``binary`` when the crop is over-wide.
+
+    Returns ``binary`` unchanged unless a single image row is >= ``RULE_ROWFRAC``
+    full of ink -- the signature of a straight edge-to-edge rule -- in which case a
+    wide horizontal morphological OPEN isolates the long run (the rule), which is
+    zeroed (plus a 1px vertical fringe for anti-aliasing). No re-tighten here: the
+    caller's ``strip_binding_and_neighbors`` re-tightens and drops the now-severed
+    neighbour."""
+    h, w = binary.shape
+    if h == 0 or w == 0 or not binary.any():
+        return binary
+    if (binary > 0).sum(1).max() < RULE_ROWFRAC * w:  # no edge-to-edge rule -> leave as-is
+        return binary
+    wpx, _hpx = page_size
+    box_w_px = (box_2d[3] - box_2d[1]) / 1000.0 * wpx
+    k = max(RULE_KMIN, int(RULE_KFRAC * box_w_px))
+    if w < k:
+        return binary
+    mask = (binary > 0).astype(np.uint8)
+    line = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (k, 1)))
+    if line.sum() == 0:
+        return binary
+    line = cv2.dilate(line, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 3)))
+    out = binary.copy()
+    out[line > 0] = 0
+    return out if out.any() else binary
 
 
 def strip_binding_and_neighbors(
@@ -870,6 +923,9 @@ def segment_word(
     binary, gray, crop_box = restrict_to_word_band(
         binary, gray, box_2d, crop_box, page_image.size, pitch_px
     )
+    # Fix 4: zero a full-width horizontal page rule (over-wide crops only) BEFORE the
+    # neighbour-drop, so the rule no longer bridges the word to a same-line neighbour.
+    binary = strip_ruled_line(binary, box_2d, crop_box, page_image.size)
     # Fix 3: strip the centre-gutter binding band + same-line neighbour words.
     binary, gray, crop_box = strip_binding_and_neighbors(
         binary, gray, box_2d, crop_box, page_image.size
