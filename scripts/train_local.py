@@ -25,12 +25,19 @@ os.environ.setdefault("MPLBACKEND", "Agg")  # headless plotting
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
 
-import torch  # noqa: E402  (must follow the env setup above)
+import matplotlib.pyplot as plt  # noqa: E402  (must follow the env setup above)
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
 from torch.utils.data.dataloader import DataLoader  # noqa: E402
 
 from data import InfiniteDataLoader, create_datasets  # noqa: E402
 from model import get_all_args, get_checkpoint, save_checkpoint  # noqa: E402
-from sample import save_samples  # noqa: E402
+from sample import (  # noqa: E402
+    GenerationParams,
+    generate,
+    plot_strokes,
+    word_offsets_to_points,
+)
 
 RUNS_DIR = os.path.join(_REPO_ROOT, "runs")
 
@@ -57,8 +64,20 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--train_size", type=int, default=2000, help="Number of combinatorial examples")
     p.add_argument("--test_size", type=int, default=300)
     p.add_argument("--lr", type=float, default=1e-2)
+    # Learning-rate decay (StepLR, already in the model): defaults match get_all_args, so
+    # the default run keeps constant lr. Pass a small --step_lr_every to actually decay.
+    p.add_argument("--step_lr_every", type=int, default=33000, help="StepLR decay interval (steps)")
+    p.add_argument("--lr_decay", type=float, default=0.333, help="StepLR multiplicative decay")
     p.add_argument("--eval_every", type=int, default=500)
     p.add_argument("--num_samples", type=int, default=3, help="Sample images to save at the end")
+    # Sample generation budget. save_samples caps it at block_size-1, which can truncate the
+    # last word of a multi-word prompt; raise this so every prompt word has room to render.
+    p.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=0,
+        help="Token budget per sample (0 = block_size-1, the dataset default)",
+    )
     return p.parse_args(argv)
 
 
@@ -77,9 +96,43 @@ def build_args(cli: argparse.Namespace, device: str):
     args.train_size = cli.train_size
     args.test_size = cli.test_size
     args.learning_rate = cli.lr
+    args.step_lr_every = cli.step_lr_every  # StepLR decay interval (model uses this)
+    args.lr_decay = cli.lr_decay  # StepLR gamma
     args.max_steps = cli.steps
     args.local_checkpoint_path = os.path.join(RUNS_DIR, f"{cli.dataset}_local.pt")
     return args
+
+
+def save_word_samples(model, dataset, num, max_new_tokens, out_dir, device, warmup=50):
+    """Greedily sample `num` examples and save a PNG each into ``out_dir``.
+
+    Mirrors sample.save_samples but takes an explicit ``max_new_tokens`` budget so a
+    multi-word prompt has room to render every word (save_samples caps the budget at
+    ``block_size - 1``, which can truncate the last word). Uses only sample.py's public
+    functions -- no change to the model or the sampling math. Returns (paths, word_counts).
+    """
+    params = GenerationParams()
+    strokes, contexts = [], []
+    for i in range(num):
+        x, c, _y = dataset[i]
+        strokes.append(x)
+        contexts.append(c)
+    x_init = torch.stack(strokes).to(device)[:, :warmup]
+    context = torch.stack(contexts).long().to(device)
+    budget = max_new_tokens if max_new_tokens > 0 else dataset.get_stroke_seq_length() - 1
+    x_samp = generate(model, x_init, context, budget, do_sample=False).to("cpu")
+    paths, word_counts = [], []
+    for i in range(x_samp.size(0)):
+        offsets = dataset.decode_stroke(x_samp[i].numpy())
+        points = np.vstack(word_offsets_to_points(offsets, params))
+        text = dataset.decode_text(context[i])
+        fig, _ax = plot_strokes(points, f'Sample {i + 1}: "{text}"')
+        path = os.path.join(out_dir, f"{dataset.name}_sample_{i + 1}.png")
+        fig.savefig(path)
+        plt.close(fig)
+        paths.append(path)
+        word_counts.append(sum(1 for w in offsets if len(w) > 1))  # words actually drawn
+    return paths, word_counts
 
 
 def main(argv=None) -> int:
@@ -129,7 +182,7 @@ def main(argv=None) -> int:
             test_loss = evaluate(test_ds)
             print(
                 f"step {step:5d} | train {last_loss:.4f} | test {test_loss:.4f} "
-                f"| {time.time() - t0:.0f}s"
+                f"| lr {scheduler.get_last_lr()[0]:.2e} | {time.time() - t0:.0f}s"
             )
             if best_loss is None or test_loss < best_loss:
                 best_loss = test_loss
@@ -144,15 +197,11 @@ def main(argv=None) -> int:
         best_loss = final_test
     save_checkpoint(model, args.local_checkpoint_path, optimizer, scheduler, step, best_loss)
 
-    # --- generate sample images into runs/ (save_samples writes relative to cwd) ---
+    # --- generate sample images into runs/ (explicit token budget so every word renders) ---
     model.eval()
-    cwd = os.getcwd()
-    os.chdir(RUNS_DIR)
-    try:
-        save_samples(model, test_ds, num=cli.num_samples, do_sample=False, log_wandb=False)
-    finally:
-        os.chdir(cwd)
-    sample_png = os.path.join(RUNS_DIR, f"{test_ds.name}_topk_1.png")
+    sample_paths, word_counts = save_word_samples(
+        model, test_ds, cli.num_samples, cli.max_new_tokens, RUNS_DIR, device
+    )
 
     print("\n[train_local] ===== summary =====")
     print(f"  device:        {device}")
@@ -160,11 +209,14 @@ def main(argv=None) -> int:
     print(f"  loss finite:   {first_loss is not None and math.isfinite(last_loss)}")
     print(f"  train loss:    {first_loss:.4f} -> {last_loss:.4f}")
     print(f"  best test:     {best_loss:.4f}  (final test {final_test:.4f})")
+    print(f"  lr decay:      step_lr_every={args.step_lr_every} lr_decay={args.lr_decay}")
+    print(f"  max_new_tokens:{cli.max_new_tokens or args.block_size - 1}")
     print(
         f"  wall-clock:    {train_secs:.1f}s ({step} steps, {1000 * train_secs / step:.0f} ms/step)"
     )
     print(f"  checkpoint:    {args.local_checkpoint_path}")
-    print(f"  sample image:  {sample_png}")
+    print(f"  words drawn per sample: {word_counts}")
+    print(f"  sample images: {', '.join(os.path.basename(p) for p in sample_paths)}")
     return 0
 
 
