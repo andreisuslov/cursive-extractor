@@ -28,6 +28,9 @@ __pycache__
 paperspace.sh
 cursivetransformer.key
 
+# OCR pipeline + scraper outputs (generated artifacts: crops, overlays, datasets, PDFs)
+/outputs/
+
 /examples*
 /deprecated*
 

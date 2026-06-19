@@ -1,0 +1,10 @@
+# OCR pipeline deps (separate from the training requirements.txt at repo root).
+# Also requires the system package `poppler` for pdf2image:
+#   macOS:  brew install poppler
+#   Debian: apt-get install poppler-utils
+google-generativeai>=0.7.0
+pdf2image>=1.17.0
+Pillow>=10.0.0
+opencv-python>=4.9.0
+numpy>=1.26.0
+matplotlib>=3.8.0
