@@ -255,8 +255,9 @@ class StrokeDataset(Dataset):
         bands were measured to trade legibility for variety monotonically: best test loss rose
         1.18 (no aug) -> 1.80 (moderate, shear +-0.15) -> 2.08 (wide, shear +-0.3, 0.6-1.6
         height), with renders visibly jaggier at each step (static/local_training/). These mild
-        ranges keep the slant variety that actually transfers while staying
-        legible. The ranges are optional (so the signature stays compatible); pass an identity
+        ranges prioritise legibility and add only a little variety -- meaningful style variety
+        needs the full ~125k-step training, which can absorb a wider band, not a laptop run.
+        The ranges are optional (so the signature stays compatible); pass an identity
         range -- (1.0, 1.0) for the scales, (0.0, 0.0) for shear/rotate, or 0.0 for jitter --
         to weaken or disable a given augmentation (what ``--no-augment`` routes through).
         """
