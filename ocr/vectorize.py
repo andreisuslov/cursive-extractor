@@ -202,6 +202,25 @@ def trace_component(
     return [path] if len(path) >= 2 else []
 
 
+def _noise_min_area(binary: np.ndarray, min_area: int) -> int:
+    """Resolution-aware speck threshold: ``max(min_area, round(0.75 * stroke_width**2))``.
+
+    A fixed ``min_area`` (tuned for the experiment's ~160 px renders, stroke width ~2-3 px)
+    lets real scan specks through on high-DPI diary crops (stroke width ~6 px), where a
+    sub-stroke-width fragment can be 10-30 px and become a spurious pen-lift. Stroke width
+    is estimated as ``2 * median(distanceTransform[ink])`` (deterministic). The 0.75 factor
+    keeps the threshold below a solid i-dot (~0.78 * stroke_width**2) so real dots survive,
+    while dropping thin noise fragments. For clean low-res inputs (stroke width < ~3.6 px,
+    e.g. the order-recovery experiment) the scaled value is < ``min_area``, so the base
+    threshold is used unchanged.
+    """
+    ink = cv2.distanceTransform((binary > 0).astype(np.uint8), cv2.DIST_L2, 5)[binary > 0]
+    if ink.size == 0:
+        return min_area
+    stroke_width = 2.0 * float(np.median(ink))
+    return max(min_area, round(0.75 * stroke_width * stroke_width))
+
+
 def trace_ink(binary: np.ndarray, min_area: int = 10) -> list[list[tuple[int, int]]]:
     """Trace a binary ink image into strokes. Pen-ups come from ink CONNECTED
     COMPONENTS (real pen-lifts: separate letters, i-dots, t-crosses), each traced
@@ -211,7 +230,11 @@ def trace_ink(binary: np.ndarray, min_area: int = 10) -> list[list[tuple[int, in
     path is shifted back to crop coordinates. The skeleton is identical to working on
     the full crop (everything outside the box is zero anyway), but the arrays stay
     small -- a one-pixel i-dot no longer gets thinned across the whole word.
+
+    ``min_area`` is raised to a stroke-width-aware floor (see ``_noise_min_area``) so
+    high-DPI scans drop sub-stroke-width specks; for clean low-res inputs it is unchanged.
     """
+    min_area = _noise_min_area(binary, min_area)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(
         (binary > 0).astype(np.uint8), connectivity=8
     )
@@ -219,7 +242,7 @@ def trace_ink(binary: np.ndarray, min_area: int = 10) -> list[list[tuple[int, in
     for lbl in range(1, n):
         x, y, w, h, area = stats[lbl]
         if area < min_area:
-            continue  # speck noise
+            continue  # speck noise (resolution-aware threshold)
         comp = (labels[y : y + h, x : x + w] == lbl).astype(np.uint8)
         skel, pts, nbrs, deg = prune_spurs(zhang_suen(comp))
         for path in trace_component(skel, pts, nbrs, deg):
