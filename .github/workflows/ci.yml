@@ -1,0 +1,49 @@
+name: CI
+
+# Read-only quality gates: lint, format check, and the test suite. No deploy/publish
+# or any mutating step. Mirrors what passes locally (ruff 0, format idempotent, 61 tests).
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    name: lint + format + tests (Python 3.12, CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            ocr/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        # Exactly what importing + running the 61 tests needs:
+        #   requirements.txt      -- training deps (torch [CPU is fine on Linux], wandb,
+        #                            numpy, matplotlib; scipy comes along, harmless)
+        #   ocr/requirements.txt  -- OCR-pipeline deps the tests import transitively
+        #                            (opencv-python, pdf2image, Pillow, google-generativeai)
+        #   requirements-dev.txt  -- pytest + ruff
+        # NOT installed: the scraper deps (selenium/webdriver-manager/requests) and the
+        # system `poppler` package -- the tests never import scrape_diary, and pdf2image
+        # imports fine without poppler (poppler is only needed at PDF-conversion time).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r ocr/requirements.txt -r requirements-dev.txt
+
+      - name: Lint (ruff check)
+        run: python -m ruff check .
+
+      - name: Format check (ruff format --check)
+        run: python -m ruff format --check .
+
+      - name: Tests (pytest)
+        # The model smoke test forces CPU, and data/easybank.json.zip + bigbank.json.zip
+        # are tracked, so the regression test runs deterministically on CI.
+        run: python -m pytest -q
