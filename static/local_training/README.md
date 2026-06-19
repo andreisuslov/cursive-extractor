@@ -156,3 +156,32 @@ reproducibility); spread is measured across the 6 renders of each word, averaged
 So the wide augmentation does what it was meant to (more handwriting variety, slant above
 all) but, at this small-model / ~11-min-per-arm scale, pays for it in legibility. A larger
 model or longer schedule would be needed to get *both* variety and clean letters.
+
+## legibility-first follow-up: the full trade-off curve (`legible_variety_01.png`, `aug_levels_01.png`)
+
+Because **legibility is the hard requirement**, the wide band above is unacceptable. To find a
+band that stays legible, two more matched runs (same config + seed) swept the augmentation
+width down, and all four levels were rendered/measured together (`runs/_ab_variety.py`):
+
+| augmentation level | shear / height band        | **best test loss** | slant variety (std) | renders |
+|--------------------|----------------------------|--------------------|---------------------|---------|
+| none (`--no-augment`) | identity                | **1.18**           | 0.91                | legible |
+| **mild (new default)** | ±0.08 / 0.93–1.08      | **1.54**           | 0.99                | legible |
+| moderate              | ±0.15 / 0.85–1.15       | 1.80               | 1.50                | jaggy   |
+| wide (old default)    | ±0.30 / 0.60–1.60       | 2.08               | 1.10*               | illegible |
+
+(*the wide slant number is noisy — the model is rough enough that the metric is unstable.)
+
+**The decisive, honest finding: at laptop scale there is no band that delivers both variety
+and legibility.** Variety stays near the no-aug baseline until the band is wide enough
+(moderate+) to already break legibility — i.e. the only settings that *add* style variety are
+the ones that *destroy* legibility. Mild augmentation keeps renders legible (in
+`legible_variety_01.png` the mild rows read "writing"/"summer" just like the no-aug rows) but
+its variety is barely above no-aug while still costing ~0.36 of loss.
+
+**What changed:** `data.augment_stroke`'s defaults were narrowed from the wide band to the
+**mild** band, so a default local run is legible. Real style variety with clean letters needs
+the capacity/schedule of the **full cloud training (~125k steps)**, which absorbs a wider band
+— not a ~7k-step laptop model. The wide band is still reachable by passing explicit ranges to
+`augment_stroke`, and any future re-widening of the *default* is caught by
+`test_augment_default_slant_is_symmetric_and_moderate` (asserts the default shear stays ≤ 0.2).
