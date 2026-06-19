@@ -118,6 +118,39 @@ def test_topology_cut_score_peaks_at_baseline_connector():
     assert score[peak] > score[21]  # connector scores above the stem centre
 
 
+def test_shear_roundtrip_recovers_original_x():
+    # de-slant a stroke then map it back: the per-row integer shift is invertible,
+    # so emitted/overlaid points must land on the original x exactly.
+    shift = sp._shear_shifts(50, -0.3)
+    strokes = [[(10, 0), (12, 25), (15, 49)]]
+    sheared = sp._shear_points(strokes, shift)
+    back = sp._unshear_groups([[np.asarray(sheared[0], dtype=float)]], shift)
+    np.testing.assert_allclose(back[0][0][:, 0], [10, 12, 15])
+
+
+def test_estimate_slant_recovers_known_lean():
+    # four parallel strokes leaning at tan = -0.3 -> de-shear should recover ~-0.3
+    # with a clear (gate-passing) prominence.
+    h, w, s0 = 60, 200, -0.3
+    b = np.zeros((h, w), np.uint8)
+    for base in (40, 90, 140, 180):
+        for y in range(8, 52):
+            x = round(base + s0 * y)
+            b[y, x - 1 : x + 2] = 255
+    s, prom = sp.estimate_slant(b)
+    assert prom >= sp.SLANT_MIN_PROM
+    assert abs(s - s0) < 0.07
+
+
+def test_estimate_slant_gates_flat_horizontal_ink():
+    # a horizontal bar has no near-vertical structure: every shear leaves the same
+    # short vertical runs, so the peak is not prominent -> gated off (s stays 0).
+    b = np.zeros((40, 200), np.uint8)
+    b[18:22, 10:190] = 255
+    s, prom = sp.estimate_slant(b)
+    assert prom < sp.SLANT_MIN_PROM or s == 0.0
+
+
 def test_ensure_count_x_forces_exact_distinct_count():
     assert sp._ensure_count_x([20.0, 20.0, 80.0], 3, 0.0, 100.0) == sorted(
         sp._ensure_count_x([20.0, 20.0, 80.0], 3, 0.0, 100.0)

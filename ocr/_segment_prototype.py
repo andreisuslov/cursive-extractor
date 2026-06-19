@@ -63,7 +63,7 @@ CLI::
         [--version N] [--box III] [--min-conf 0.4] [--dpi 600]
 
 With no ``--box`` it segments a default sample of page-4 words and writes the
-colour overlays to ``runs/seg_proto4_<word>.png`` for visual QA.
+colour overlays to ``runs/seg_proto5_<word>.png`` for visual QA.
 """
 
 import argparse
@@ -456,6 +456,100 @@ def topology_cut_score(binary: np.ndarray, x_min: float, x_max: float) -> np.nda
     return np.clip(score, 0.0, 1.0)
 
 
+# --- Step 3c: slant-aware de-shear (slanted cuts via the existing x DP) -------
+# Cursive LEANS, so a strictly vertical cut at a boundary x clips into the slanted
+# body of the neighbour letter. We estimate the word's slant, shear the ink upright
+# (x_shear = x - tan(theta)*y, done as an integer per-row pixel SHIFT so ink counts
+# and stroke topology are preserved exactly), run the EXISTING x-position profile +
+# DP in that upright space -- a vertical cut there is a SLANTED cut in the original
+# -- then map the sliced points + boundaries back. Gated on confidence: a flat
+# de-shear curve (a connected blob like *translate*) keeps s = 0, i.e. identical
+# vertical cuts, so the topology fallback path is left exactly as it was.
+SLANT_TAN_MIN = -0.85  # de-shear search window for tan(slant); cursive leans right
+SLANT_TAN_MAX = 0.30  # ...allow a little back-slant
+SLANT_STEP = 0.03  # search step in tan units
+SLANT_MIN_PROM = 0.06  # de-shear peak prominence below this -> unreliable, use s=0
+
+
+def _shear_shifts(h: int, s: float) -> np.ndarray:
+    """Integer per-row x-shift array realising ``x_shear = x - s*y``, offset so every
+    shifted column is >= 0. ``shift[y]`` is ADDED to a point's x (and to row ``y``'s
+    pixels) to de-slant; SUBTRACT it to map back. ``s == 0`` -> all zeros (identity)."""
+    shift = np.rint(-s * np.arange(h)).astype(int)
+    return shift - int(shift.min())
+
+
+def _shear_binary(binary: np.ndarray, shift: np.ndarray) -> np.ndarray:
+    """De-slant ``binary`` by the integer per-row ``shift`` (pure pixel translation:
+    no resampling, so ink counts/connectivity are preserved exactly)."""
+    h, w = binary.shape
+    out = np.zeros((h, w + int(shift.max())), binary.dtype)
+    for y in range(h):
+        out[y, shift[y] : shift[y] + w] = binary[y]
+    return out
+
+
+def _shear_points(
+    strokes: list[list[tuple[int, int]]], shift: np.ndarray
+) -> list[list[tuple[int, int]]]:
+    """Add the per-row ``shift`` to each point's x (de-slant the traced ink)."""
+    n = len(shift)
+    return [[(x + int(shift[int(np.clip(round(y), 0, n - 1))]), y) for x, y in s] for s in strokes]
+
+
+def _unshear_groups(groups: list[list[np.ndarray]], shift: np.ndarray) -> list[list[np.ndarray]]:
+    """Subtract the per-row ``shift`` from each sliced point -> original geometry."""
+    n = len(shift)
+    out: list[list[np.ndarray]] = []
+    for g in groups:
+        ng: list[np.ndarray] = []
+        for sub in g:
+            arr = np.asarray(sub, dtype=float).copy()
+            yy = np.clip(np.rint(arr[:, 1]).astype(int), 0, n - 1)
+            arr[:, 0] = arr[:, 0] - shift[yy]
+            ng.append(arr)
+        out.append(ng)
+    return out
+
+
+def estimate_slant(binary: np.ndarray) -> tuple[float, float]:
+    """Estimate the word slant as ``s = tan(theta)`` via the classic projection
+    deslant (run-length variant): the shear that best aligns ink into long vertical
+    runs. The run-length form rewards genuine near-vertical pen strokes and avoids
+    the runaway of a plain sum-of-squared-columns profile (which an extreme shear
+    inflates by stacking the diagonal connector strokes).
+
+    Returns ``(s, prominence)`` where ``prominence`` (peak height above the median
+    objective, in [0, 1]) is the confidence used to GATE application. A peak at the
+    search-window edge is treated as unreliable and returns ``(0.0, 0.0)``.
+    """
+    ys, xs = np.nonzero(binary > 0)
+    if xs.size < 50:
+        return 0.0, 0.0
+    h = binary.shape[0]
+    grid = np.arange(SLANT_TAN_MIN, SLANT_TAN_MAX + 1e-9, SLANT_STEP)
+    obj = np.empty(len(grid))
+    for i, s in enumerate(grid):
+        shift = _shear_shifts(h, float(s))
+        sx = xs + shift[ys]
+        sb = np.zeros((h, int(sx.max()) + 1), bool)
+        sb[ys, sx] = True
+        run = sb[0].astype(np.int32)  # longest continuous vertical run per column
+        best = run.copy()
+        for y in range(1, h):
+            run = (run + 1) * sb[y]
+            best = np.maximum(best, run)
+        obj[i] = float((best.astype(float) ** 2).sum())
+    k = int(obj.argmax())
+    prom = float((obj[k] - np.median(obj)) / (obj[k] + 1e-12))
+    if k == 0 or k == len(grid) - 1:  # peak pinned at the window edge -> unreliable
+        return 0.0, 0.0
+    y0, y1, y2 = obj[k - 1], obj[k], obj[k + 1]  # parabolic sub-step refinement
+    den = y0 - 2 * y1 + y2
+    s_best = float(grid[k]) - (0.5 * (y2 - y0) / den * SLANT_STEP if den != 0 else 0.0)
+    return s_best, prom
+
+
 def grid_candidates(
     score: np.ndarray, x_min: float, x_max: float, max_cand: int = GRID_MAX_CAND
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -708,9 +802,13 @@ def draw_overlay(
     word: str,
     boundaries_x: list[float],
     lw: int = 3,
+    shift: np.ndarray | None = None,
 ) -> np.ndarray:
     """Colour overlay: faded ink background, one colour per letter slot, a dashed
-    vertical line at each boundary x, and the slot char labelled above it."""
+    boundary line at each cut, and the slot char labelled above it. ``boundaries_x``
+    are in DE-SHEARED column space; with ``shift`` given they are drawn back as the
+    SLANTED lines they represent in the original image (``x = bx - shift[y]``),
+    otherwise as plain vertical lines."""
     img = _fade(gray)
     h = img.shape[0]
     for k, substrokes in enumerate(groups):
@@ -728,10 +826,18 @@ def draw_overlay(
         ch = word[k] if k < len(word) else "?"
         if leftmost is not None:
             cv2.putText(img, ch, (leftmost, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2, cv2.LINE_AA)
+    n = len(shift) if shift is not None else 0
+
+    def _orig_x(bx: float, y: int) -> int:
+        sh = int(shift[min(y, n - 1)]) if n else 0
+        return int(np.rint(bx - sh))
+
     for bx in boundaries_x:
-        x = int(np.rint(bx))
         for y0 in range(0, h, 12):
-            cv2.line(img, (x, y0), (x, min(h, y0 + 6)), (40, 40, 40), 1, cv2.LINE_AA)
+            y1 = min(h - 1, y0 + 6)
+            cv2.line(
+                img, (_orig_x(bx, y0), y0), (_orig_x(bx, y1), y1), (40, 40, 40), 1, cv2.LINE_AA
+            )
     return img
 
 
@@ -787,12 +893,26 @@ def segment_word(
         return _qa(word, max(1, L), 0, 0, 1.0, False, len(groups))
 
     body, diacritics = classify_components(strokes, (h, w), L)  # Step 2
-    body_pts = np.concatenate([np.asarray(s, dtype=float) for s in body])
+
+    # Step 3c: estimate the word slant and de-slant everything into upright space, so
+    # the vertical-cut DP below places SLANTED cuts in the original. Gated: a flat
+    # de-shear curve (e.g. the connected blob *translate*) keeps s = 0 -> identity
+    # shift -> the original vertical cuts + topology fallback, untouched.
+    s_slant, slant_prom = estimate_slant(binary)
+    if slant_prom < SLANT_MIN_PROM:
+        s_slant = 0.0
+    shift = _shear_shifts(h, s_slant)
+    sbin = _shear_binary(binary, shift) if s_slant else binary
+    body_s = _shear_points(body, shift) if s_slant else body
+    diac_s = _shear_points(diacritics, shift) if s_slant else diacritics
+
+    body_pts = np.concatenate([np.asarray(p, dtype=float) for p in body_s])
     x_min, x_max = float(body_pts[:, 0].min()), float(body_pts[:, 0].max())
     if x_max - x_min < 2:
         return _qa(word, L, 0, 0, 0.0, True, 0, error="degenerate x-span")
 
-    col = column_ink_counts(binary)
+    sw = sbin.shape[1]
+    col = column_ink_counts(sbin)
     x_expected = expected_boundary_x(word, x_min, x_max)  # Step 4
     min_gap = 0.40 * (x_max - x_min) / L  # keep boundaries off the same pen-gap
 
@@ -801,26 +921,27 @@ def segment_word(
         b = dp_boundaries_x(cand_x, cand_score, x_expected, x_min, x_max, min_gap)  # Step 5
         return _ensure_count_x(b, L - 1, x_min, x_max)
 
-    # Step 3: x-density profile (the normal path). On ONE ligature-joined connected
-    # stroke x-density can pile its cuts onto a few incidental pen-gaps and leave a
-    # whole multi-letter run uncut; detect that (a blob whose widest cut-gap exceeds
-    # ~one letter * BLOB_XDENS_MAXGAP) and ONLY then fall back to the skeleton
-    # upper-envelope topology score. So a connected word x-density already cuts well
-    # (e.g. *the*) is untouched -- the fallback fires for the genuine failure (e.g.
-    # *translate*, a whole cursive line with no real between-letter gaps).
-    score = cut_score_profile(binary, x_min, x_max)
+    # Step 3: x-density profile (the normal path), now over the de-sheared image. On
+    # ONE ligature-joined connected stroke x-density can pile its cuts onto a few
+    # incidental pen-gaps and leave a whole multi-letter run uncut; detect that (a
+    # blob whose widest cut-gap exceeds ~one letter * BLOB_XDENS_MAXGAP) and ONLY then
+    # fall back to the skeleton upper-envelope topology score. So a connected word
+    # x-density already cuts well (e.g. *the*) is untouched -- the fallback fires for
+    # the genuine failure (e.g. *translate*, a whole cursive line with no real gaps).
+    score = cut_score_profile(sbin, x_min, x_max)
     bxs = cuts_for(score)
     if (
-        is_connected_blob(binary, x_min, x_max)
+        is_connected_blob(sbin, x_min, x_max)
         and max_cut_gap(bxs, x_min, x_max) > BLOB_XDENS_MAXGAP * (x_max - x_min) / L
     ):
-        score = topology_cut_score(binary, x_min, x_max)
+        score = topology_cut_score(sbin, x_min, x_max)
         bxs = cuts_for(score)
 
-    groups = slice_by_x(body, bxs, L)  # Step 6
-    groups = attach_diacritics_x(groups, bxs, diacritics, L)
+    groups_s = slice_by_x(body_s, bxs, L)  # Step 6 (in de-sheared x-space)
+    groups_s = attach_diacritics_x(groups_s, bxs, diac_s, L)
+    groups = _unshear_groups(groups_s, shift) if s_slant else groups_s  # back to original
 
-    n_free = sum(1 for bx in bxs if col[int(np.clip(round(bx), 0, w - 1))] == 0)
+    n_free = sum(1 for bx in bxs if col[int(np.clip(round(bx), 0, sw - 1))] == 0)
     n_internal = len(bxs) - n_free
     span = max(1.0, x_max - x_min)
     boundary_fracs = [round((bx - x_min) / span, 4) for bx in bxs]
@@ -829,7 +950,7 @@ def segment_word(
 
     if overlay_path:
         paths.ensure_parent(overlay_path)
-        cv2.imwrite(overlay_path, draw_overlay(gray, groups, word, bxs))
+        cv2.imwrite(overlay_path, draw_overlay(gray, groups, word, bxs, shift=shift))
     if write_files and out_dir:
         emit_letter_files(groups, word, (h, w), box_id, boundary_fracs, conf, low_conf, out_dir)
 
@@ -891,7 +1012,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--runs-dir",
         default="runs",
-        help="Where to write seg_proto4_<word>.png overlays (sample mode)",
+        help="Where to write seg_proto5_<word>.png overlays (sample mode)",
     )
     return p.parse_args(argv)
 
@@ -958,7 +1079,7 @@ def main(argv: list[str] | None = None) -> None:
             except (IndexError, KeyError):
                 continue
             word = word or expected
-            run_overlay = os.path.join(args.runs_dir, f"seg_proto4_{paths.slugify(word)}.png")
+            run_overlay = os.path.join(args.runs_dir, f"seg_proto5_{paths.slugify(word)}.png")
             qa = segment_word(
                 page_image,
                 box_2d,
