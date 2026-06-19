@@ -10,7 +10,7 @@ Modules:
     reconcile        - align grounded boxes to the transcript; force text + infill gaps
     tool             - render the browser handwriting-capture tool from the HTML template
     extract_boxes    - CLI: transcribe each page + detect word/punctuation boxes
-    vectorize        - CLI: skeletonize cropped ink into (x, y, pen) stroke points
+    vectorize        - CLI: trace cropped ink into (x, y, pen) stroke points (continuous, lift-free)
     package_boxes    - CLI: one folder per box (text_recognized.txt, box.jpg, vectorized.jpg)
     qa               - CLI: check the transcript matches the concatenated box texts
     crop             - CLI: crop a single OCR box to a high-DPI image

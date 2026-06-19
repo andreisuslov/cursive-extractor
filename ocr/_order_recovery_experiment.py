@@ -88,9 +88,9 @@ def x_reversals(px, pen_flags, thresh=3.0):
     return n
 
 
-def main():
-    words = load_words()
-    print(f"Testing {len(words)} words (clean render -> vectorize -> compare)\n")
+def run(name, save_prefix=None, save_idx=()):
+    words = load_words(name)
+    print(f"--- {name}: testing {len(words)} words (clean render -> vectorize -> compare) ---")
     rows = []
     for k, (word, pts, aspect) in enumerate(words):
         px, W = to_canvas(pts, aspect)
@@ -117,28 +117,64 @@ def main():
             true_rev=x_reversals(px, true_pen), rec_rev=x_reversals(rec_px, rec_pen),
             npts_true=len(px), npts_rec=len(rec),
         ))
-        if k in SAVE_SAMPLES:
-            # stack true (top) over recovered (bottom)
+        if save_prefix is not None and k in save_idx:
             combo = Image.new("L", (W, 2 * H + 4), 200)
             combo.paste(true_img, (0, 0))
             combo.paste(rec_img, (0, H + 4))
-            path = f"/tmp/order_recovery_{k:02d}_{word[:10]}.png"
-            combo.save(path)
+            combo.save(f"/tmp/{save_prefix}_{k:02d}_{word[:10]}.png")
 
     a = lambda key: np.mean([r[key] for r in rows])
-    print(f"{'word':14} {'IoU':>5} {'trueUp':>6} {'recUp':>6} {'lenRatio':>8} {'trueRev':>7} {'recRev':>6}")
-    for r in rows[:25]:
-        print(f"{r['word'][:14]:14} {r['iou']:5.2f} {r['true_ups']:6d} {r['rec_ups']:6d} "
-              f"{r['len_ratio']:8.2f} {r['true_rev']:7d} {r['rec_rev']:6d}")
-    print("\n=== AVERAGES over", len(rows), "words ===")
-    print(f"  visual IoU (recovered vs true ink): {a('iou'):.3f}   (1.0 = perfect overlap)")
-    print(f"  pen-ups true -> recovered:          {a('true_ups'):.1f} -> {a('rec_ups'):.1f}   "
-          f"(x{a('rec_ups')/max(a('true_ups'),1e-6):.1f} fabricated)")
-    print(f"  path-length ratio (rec/true):       {a('len_ratio'):.2f}   (>1 = retracing/detours)")
-    print(f"  x-reversals true -> recovered:      {a('true_rev'):.1f} -> {a('rec_rev'):.1f}   "
-          f"(backtracks = scrambled order)")
-    print(f"\nSaved side-by-side samples (true top / recovered bottom) to /tmp/order_recovery_*.png")
+    print(f"  visual IoU:        {a('iou'):.3f}   (1.0 = perfect overlap; held = good)")
+    print(f"  pen-ups true->rec: {a('true_ups'):.1f} -> {a('rec_ups'):.1f}   "
+          f"(x{a('rec_ups')/max(a('true_ups'),1e-6):.1f} fabricated; target ~1x)")
+    print(f"  path-length ratio: {a('len_ratio'):.2f}   (>1 = retracing detours)")
+    print(f"  x-reversals:       {a('true_rev'):.1f} -> {a('rec_rev'):.1f}")
+    return rows
+
+
+def diacritic_check(rows):
+    """For words with i/j/t/x, the writer lifts the pen for dots/crosses, so true
+    pen-ups > 1. Check the recovered pen-ups track the true count (= diacritics
+    recovered as separate strokes)."""
+    dia = [r for r in rows if any(c in r["word"].lower() for c in "ijtx") and r["true_ups"] > 1]
+    if not dia:
+        print("  (no multi-stroke i/j/t/x words found)")
+        return
+    exact = sum(1 for r in dia if r["rec_ups"] == r["true_ups"])
+    close = sum(1 for r in dia if abs(r["rec_ups"] - r["true_ups"]) <= 1)
+    tu = np.mean([r["true_ups"] for r in dia])
+    ru = np.mean([r["rec_ups"] for r in dia])
+    print(f"  diacritic words (i/j/t/x, true pen-ups>1): {len(dia)}")
+    print(f"    avg pen-ups true->rec: {tu:.1f} -> {ru:.1f}")
+    print(f"    recovered pen-ups EXACT match: {exact}/{len(dia)}   within 1: {close}/{len(dia)}")
+    for r in sorted(dia, key=lambda r: -abs(r["rec_ups"] - r["true_ups"]))[:8]:
+        print(f"      {r['word'][:16]:16} true={r['true_ups']} rec={r['rec_ups']} iou={r['iou']:.2f}")
 
 
 if __name__ == "__main__":
-    main()
+    print("==================== EASYBANK (connected, no i/j/t/x) ====================")
+    run("easybank", save_prefix="order_recovery", save_idx=(0, 5, 12, 25))
+    print("\n==================== BIGBANK (has i/j/t/x diacritics) ====================")
+    big = run("bigbank", save_prefix="bigbank_diac", save_idx=())
+    print("  --- diacritic recovery ---")
+    diacritic_check(big)
+    # save a few i/j/t/x sample images for visual inspection
+    import json as _json, zipfile as _zip
+    with _zip.ZipFile("data/bigbank.json.zip") as z:
+        _d = _json.load(z.open(z.namelist()[0]))
+    shown = 0
+    for it in _d:
+        w = it["metadata"].get("asciiSequence", "")
+        pts = np.array(it["points"], float)
+        if shown >= 4 or not any(c in w.lower() for c in "it") or int((pts[:, 2] == 0).sum()) < 2:
+            continue
+        aspect = it["metadata"].get("aspectRatio", 1)
+        px, W = to_canvas(pts, aspect)
+        true_img = render(px, pts[:, 2], W)
+        rec = np.array(vectorize_pil_crop(true_img.convert("RGB")), float)
+        rec_img = render(rec[:, :2] * [W, H], rec[:, 2], W)
+        combo = Image.new("L", (W, 2 * H + 4), 200)
+        combo.paste(true_img, (0, 0)); combo.paste(rec_img, (0, H + 4))
+        combo.save(f"/tmp/bigbank_diac_{shown}_{w[:10]}.png")
+        shown += 1
+    print(f"  saved {shown} i/t diacritic samples to /tmp/bigbank_diac_*.png")

@@ -1,8 +1,16 @@
 """Vectorize cropped handwriting ink into ordered (x, y, pen) stroke points.
 
-Pipeline per crop: threshold -> morphological close -> skeletonize -> walk the
-skeleton with a nearest-neighbor heuristic -> emit normalized points with pen-up
-(state 0) markers between disconnected strokes.
+Pipeline per crop: threshold/close -> ink CONNECTED COMPONENTS (one real pen-lift
+per component: separate letters, i-dots, t-crosses) -> per component, a 1-px
+Zhang-Suen skeleton traced as a single continuous depth-first path (retracing
+along drawn edges at dead-ends, so no fabricated pen-ups and no spurious lines)
+-> normalized points with one pen-up (state 0) marker per stroke.
+
+This recovers the strokes that are *physically separable* from a static image
+(a lift can only be recovered where the ink is actually disconnected). On the
+easybank/bigbank ground-truth check it cut fabricated pen-ups from ~95/word to
+1/word on connected words, held visual IoU (~0.67), and recovered the true ink
+connected-component count on 37/40 diacritic words. See _order_recovery_experiment.py.
 
 Two CLI modes:
   * batch  -- read a per-page boxes JSON, vectorize every word, write a dataset
@@ -24,47 +32,6 @@ from . import config, paths
 from .pdf_utils import load_page, crop_to_box
 
 
-def skeletonize(img):
-    """Morphological skeletonization. ``img``: binary (white ink on black)."""
-    size = np.size(img)
-    skel = np.zeros(img.shape, np.uint8)
-    element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-    temp_img = img.copy()
-    done = False
-    while not done:
-        eroded = cv2.erode(temp_img, element)
-        temp = cv2.dilate(eroded, element)
-        temp = cv2.subtract(temp_img, temp)
-        skel = cv2.bitwise_or(skel, temp)
-        temp_img = eroded.copy()
-        if size - cv2.countNonZero(temp_img) == size:
-            done = True
-    return skel
-
-
-def order_points(skel):
-    """Order skeleton pixels into a path via greedy nearest-neighbor walk."""
-    y_idxs, x_idxs = np.nonzero(skel)
-    points = list(zip(x_idxs, y_idxs))
-    if not points:
-        return []
-
-    # Start top-left-most (heuristic for English), then hop to adjacent pixels.
-    points.sort(key=lambda p: (p[0], p[1]))
-    ordered_path = [points.pop(0)]
-    current_point = ordered_path[0]
-    while points:
-        candidates = [
-            p for p in points
-            if max(abs(p[0] - current_point[0]), abs(p[1] - current_point[1])) <= 1
-        ]
-        next_point = candidates[0] if candidates else points[0]
-        ordered_path.append(next_point)
-        points.remove(next_point)
-        current_point = next_point
-    return ordered_path
-
-
 def preprocess(gray):
     """Grayscale crop -> closed binary image (white ink on black)."""
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -73,37 +40,153 @@ def preprocess(gray):
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 
-def format_points(path_points, crop_width, crop_height):
-    """Normalize an ordered path to [0,1] and insert pen-up markers on jumps.
+# --- Clean skeleton + continuous path tracing -------------------------------
+# The old path (morphological skeleton + greedy nearest-neighbour order_points +
+# format_points' ">2px gap = pen-up") shattered one connected cursive word into
+# ~95 fragments. Replaced with: ink connected-components for pen-ups, a real 1-px
+# Zhang-Suen skeleton per component, and a depth-first trace that retraces over
+# drawn edges at dead-ends -> one lift-free stroke per component.
 
-    A gap of more than 2px between consecutive skeleton pixels is treated as the
-    end of a stroke: the last point is duplicated with state 0 (pen up).
-    """
-    formatted = []
-    if not path_points:
-        return formatted
+def zhang_suen(binary):
+    """Zhang-Suen thinning -> clean 1-px skeleton (uint8 0/1). ``binary``: ink>0."""
+    img = (binary > 0).astype(np.uint8)
+    changed = True
+    while changed:
+        changed = False
+        for step in (0, 1):
+            P = np.pad(img, 1)
+            P2, P3, P4 = P[:-2, 1:-1], P[:-2, 2:], P[1:-1, 2:]
+            P5, P6, P7 = P[2:, 2:], P[2:, 1:-1], P[2:, :-2]
+            P8, P9 = P[1:-1, :-2], P[:-2, :-2]
+            seq = [P2, P3, P4, P5, P6, P7, P8, P9]
+            B = sum(seq)
+            A = np.zeros_like(img)
+            ring = seq + [P2]
+            for a, b in zip(ring[:-1], ring[1:]):
+                A += ((a == 0) & (b == 1)).astype(np.uint8)
+            cond = (img == 1) & (B >= 2) & (B <= 6) & (A == 1)
+            if step == 0:
+                cond &= (P2 * P4 * P6 == 0) & (P4 * P6 * P8 == 0)
+            else:
+                cond &= (P2 * P4 * P8 == 0) & (P2 * P6 * P8 == 0)
+            if cond.any():
+                img[cond] = 0
+                changed = True
+    return img
 
-    current_stroke = []
-    for j, p in enumerate(path_points):
-        nx = round(max(0.0, min(1.0, float(p[0]) / crop_width)), 4)
-        ny = round(max(0.0, min(1.0, float(p[1]) / crop_height)), 4)
-        if j == 0:
-            current_stroke.append([nx, ny, 1])
-            continue
-        prev_p = path_points[j - 1]
-        if max(abs(p[0] - prev_p[0]), abs(p[1] - prev_p[1])) <= 2:
-            current_stroke.append([nx, ny, 1])  # connected
+
+_OFFS = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+
+
+def _unit(dx, dy):
+    n = (dx * dx + dy * dy) ** 0.5
+    return (dx / n, dy / n) if n else (0.0, 0.0)
+
+
+def _nbrs_deg(pts):
+    nbrs = {(x, y): [(x + dx, y + dy) for dx, dy in _OFFS if (x + dx, y + dy) in pts]
+            for (x, y) in pts}
+    return nbrs, {p: len(n) for p, n in nbrs.items()}
+
+
+def prune_spurs(skel, max_spur=6, iters=3):
+    """Remove short endpoint branches (thinning hair off a thick-ink medial axis)
+    that attach to a junction; standalone small marks are left intact."""
+    skel = skel.copy()
+    for _ in range(iters):
+        ys, xs = np.nonzero(skel)
+        pts = set(zip(xs.tolist(), ys.tolist()))
+        if not pts:
+            break
+        nbrs, deg = _nbrs_deg(pts)
+        remove = set()
+        for ep in [p for p in pts if deg[p] == 1]:
+            path, prev, cur = [ep], None, ep
+            while True:
+                nxt = [n for n in nbrs[cur] if n != prev]
+                if len(nxt) != 1 or deg[cur] >= 3 or len(path) > max_spur:
+                    break
+                prev, cur = cur, nxt[0]
+                path.append(cur)
+            if len(path) <= max_spur + 1 and deg.get(path[-1], 0) >= 3:
+                remove.update(path[:-1])  # drop spur, keep the junction pixel
+        if not remove:
+            break
+        for (x, y) in remove:
+            skel[y, x] = 0
+    return skel
+
+
+def trace_component(skel):
+    """Trace ONE connected skeleton into a single continuous path via depth-first
+    walk with backtracking: prefer the straightest unvisited neighbour, and when a
+    branch dead-ends, retrace back along already-drawn skeleton edges (invisible
+    overlap -- no spurious lines, no pen-ups) until an unvisited branch is reached.
+    Returns ``[path]`` (one stroke) covering the whole component, or ``[]``."""
+    ys, xs = np.nonzero(skel)
+    pts = set(zip(xs.tolist(), ys.tolist()))
+    if not pts:
+        return []
+    nbrs, deg = _nbrs_deg(pts)
+    eps = [p for p in pts if deg[p] == 1]
+    start = min(eps if eps else pts, key=lambda p: (p[0], p[1]))
+
+    visited = {start}
+    path = [start]
+    stack = [start]
+    last = (0.0, 0.0)
+    while stack:
+        cur = stack[-1]
+        cand = [n for n in nbrs[cur] if n not in visited]
+        if cand:
+            if last == (0.0, 0.0):
+                nxt = min(cand, key=lambda p: (p[0], p[1]))
+            else:
+                def cont(p):
+                    d = _unit(p[0] - cur[0], p[1] - cur[1])
+                    return last[0] * d[0] + last[1] * d[1]
+                nxt = max(cand, key=cont)
+            visited.add(nxt)
+            stack.append(nxt)
+            path.append(nxt)
+            last = _unit(nxt[0] - cur[0], nxt[1] - cur[1])
         else:
-            last_p = current_stroke[-1]  # end the stroke with a pen-up marker
-            current_stroke.append([last_p[0], last_p[1], 0])
-            formatted.extend(current_stroke)
-            current_stroke = [[nx, ny, 1]]
+            stack.pop()
+            if stack:
+                path.append(stack[-1])        # retrace one edge backwards
+                last = _unit(stack[-1][0] - cur[0], stack[-1][1] - cur[1])
+    return [path] if len(path) >= 2 else []
 
-    if current_stroke:
-        last_p = current_stroke[-1]
-        current_stroke.append([last_p[0], last_p[1], 0])
-        formatted.extend(current_stroke)
-    return formatted
+
+def trace_ink(binary, min_area=10):
+    """Trace a binary ink image into strokes. Pen-ups come from ink CONNECTED
+    COMPONENTS (real pen-lifts: separate letters, i-dots, t-crosses), each traced
+    as one continuous path. Returns strokes (lists of (x, y) pixels), reading order.
+    """
+    n, labels = cv2.connectedComponents((binary > 0).astype(np.uint8), connectivity=8)
+    strokes = []
+    for lbl in range(1, n):
+        comp = (labels == lbl)
+        if int(comp.sum()) < min_area:
+            continue  # speck noise
+        skel = prune_spurs(zhang_suen(comp.astype(np.uint8)))
+        strokes.extend(trace_component(skel))
+    strokes.sort(key=lambda s: min(p[0] for p in s))  # left-to-right reading order
+    return strokes
+
+
+def format_strokes(strokes, crop_width, crop_height):
+    """Normalize traced strokes to [0,1] and add one pen-up marker per stroke."""
+    out = []
+    for stroke in strokes:
+        if len(stroke) < 2:
+            continue
+        for (x, y) in stroke:
+            nx = round(max(0.0, min(1.0, float(x) / crop_width)), 4)
+            ny = round(max(0.0, min(1.0, float(y) / crop_height)), 4)
+            out.append([nx, ny, 1])
+        out.append([out[-1][0], out[-1][1], 0])  # pen-up at stroke end
+    return out
 
 
 def vectorize_pil_crop(pil_crop, contrast=2.0):
@@ -111,32 +194,31 @@ def vectorize_pil_crop(pil_crop, contrast=2.0):
     img = ImageEnhance.Contrast(pil_crop).enhance(contrast) if contrast else pil_crop
     bgr = np.array(img)[:, :, ::-1].copy()  # PIL RGB -> OpenCV BGR
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    path_points = order_points(skeletonize(preprocess(gray)))
+    strokes = trace_ink(preprocess(gray))
     crop_width, crop_height = pil_crop.size
-    return format_points(path_points, crop_width, crop_height)
+    return format_strokes(strokes, crop_width, crop_height)
 
 
 def vectorize_image_file(input_path, overlay_path=None):
-    """Vectorize a standalone image file; optionally save a green-trace overlay.
+    """Vectorize a standalone image file; optionally save a stroke overlay.
 
-    Returns the ordered (unnormalized) path points.
+    Returns the traced strokes (lists of unnormalized (x, y) pixels).
     """
     img = cv2.imread(input_path)
     if img is None:
         raise FileNotFoundError(f"Could not read image: {input_path}")
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    path_points = order_points(skeletonize(preprocess(gray)))
+    strokes = trace_ink(preprocess(gray))
 
     if overlay_path:
         overlay = img.copy()
-        for i in range(len(path_points) - 1):
-            p1, p2 = path_points[i], path_points[i + 1]
-            if max(abs(p1[0] - p2[0]), abs(p1[1] - p2[1])) <= 2:
-                cv2.line(overlay, p1, p2, (0, 255, 0), 2)
-            else:
-                cv2.circle(overlay, p2, 1, (0, 255, 0), -1)
+        for stroke in strokes:
+            for i in range(len(stroke) - 1):
+                cv2.line(overlay, stroke[i], stroke[i + 1], (0, 255, 0), 2)
+            if stroke:
+                cv2.circle(overlay, stroke[0], 2, (0, 0, 255), -1)  # stroke start
         cv2.imwrite(overlay_path, overlay)
-    return path_points
+    return strokes
 
 
 def vectorize_boxes(pdf_path, boxes, page_index, dpi=600, padding=None,
