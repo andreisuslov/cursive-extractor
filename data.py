@@ -236,13 +236,27 @@ class StrokeDataset(Dataset):
             ]
         )
 
-    def augment_stroke(self, stroke):
-        # stroke = random_horizontal_shear(stroke, shear_range=(-0.30, 0.15)) # Horizontal shear
-        stroke = random_horizontal_shear(stroke, shear_range=(-0.22, -0.18))
-        stroke[:, 0:1] *= np.random.uniform(0.9, 1.1)
-        stroke[:, 1:2] *= np.random.uniform(0.9, 1.1)
-        # stroke = random_rotate(stroke, angle_range=(-.08, .08))
-
+    def augment_stroke(
+        self,
+        stroke,
+        shear_range=(-0.3, 0.3),
+        rotate_range=(-4.0, 4.0),
+        height_scale_range=(0.6, 1.6),
+        width_scale_range=(0.8, 1.3),
+        height_jitter=0.04,
+    ):
+        """Augment one word's strokes at training time. The defaults intentionally widen
+        handwriting variety versus the old narrow one-direction slant + 0.9-1.1 scale, so
+        the model sees both-way slant, line incline, tall/short letters, condensed/spread
+        spacing, and per-word vertical jitter. The ranges are optional (so the signature
+        stays compatible); pass an identity range -- (1.0, 1.0) for the scales, (0.0, 0.0)
+        for shear/rotate, or 0.0 for jitter -- to weaken or disable a given augmentation.
+        """
+        stroke[:, 0:1] *= np.random.uniform(*width_scale_range)  # condensed vs spread (x)
+        stroke[:, 1:2] *= np.random.uniform(*height_scale_range)  # tall vs short letters (y)
+        stroke = random_horizontal_shear(stroke, shear_range=shear_range)  # both-way slant
+        stroke = random_rotate(stroke, angle_range=rotate_range)  # line incline (re-enabled)
+        stroke[:, 1:2] += np.random.uniform(-height_jitter, height_jitter)  # ride higher/lower
         downsample_percent = self.args.downsample_mean + self.args.downsample_width * (
             np.random.rand() - 0.5
         )

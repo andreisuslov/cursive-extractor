@@ -1,6 +1,7 @@
 """Unit tests for data.py pure stroke transforms (fixed seeds, tiny synthetic inputs)."""
 
 import random
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -108,3 +109,73 @@ def test_downsample_drop_prob_reduces_further():
     dropped = d.downsample(arr, 0.5, drop_prob=0.5)
     assert len(dropped) <= len(base)  # random drop removes some middle points
     assert dropped[0, 0] == 0.0 and dropped[-2, 0] == 9.0  # endpoints always kept
+
+
+# --- augment_stroke (widened training augmentation: slant/incline/height/width/jitter) ---
+
+
+def _aug_dataset():
+    args = SimpleNamespace(
+        alphabet=" abcdefghijklmnopqrstuvwxyz",
+        augment=True,
+        max_seq_length=512,
+        seed=0,
+        downsample_mean=0.65,
+        downsample_width=0.1,
+    )
+    word = np.array([[i * 0.01, np.sin(i * 0.3) * 0.1, 1] for i in range(40)] + [[0.4, 0.0, 0]])
+    return d.StrokeDataset([[word]], ["w"], args), word
+
+
+def test_augment_stroke_finite_shape_and_pen_valid():
+    ds, word = _aug_dataset()
+    np.random.seed(1)
+    random.seed(1)
+    out = ds.augment_stroke(word.copy())
+    assert out.ndim == 2 and out.shape[1] == 3  # (M, 3)
+    assert out.shape[0] >= 2  # downsample keeps at least 2 points
+    assert np.isfinite(out).all()  # no NaN/inf from the wider transforms
+    assert set(np.unique(out[:, 2]).tolist()).issubset({0.0, 1.0})  # pen states stay 0/1
+
+
+def test_augment_stroke_deterministic_under_seed():
+    ds, word = _aug_dataset()
+    np.random.seed(7)
+    random.seed(7)
+    a = ds.augment_stroke(word.copy())
+    np.random.seed(7)
+    random.seed(7)
+    b = ds.augment_stroke(word.copy())
+    assert np.array_equal(a, b)  # identical given the same RNG seeds
+
+
+def test_augment_stroke_identity_ranges_only_downsample():
+    # Identity geometric ranges -> no shear/rotate/scale/jitter, only downsampling, so
+    # every output point is one of the input points (geometry untouched).
+    ds, word = _aug_dataset()
+    np.random.seed(3)
+    random.seed(3)
+    out = ds.augment_stroke(
+        word.copy(),
+        shear_range=(0.0, 0.0),
+        rotate_range=(0.0, 0.0),
+        height_scale_range=(1.0, 1.0),
+        width_scale_range=(1.0, 1.0),
+        height_jitter=0.0,
+    )
+    inset = {tuple(np.round(p, 6)) for p in word}
+    assert all(tuple(np.round(p, 6)) in inset for p in out)  # output is a subset of input
+
+
+def test_augment_default_slant_is_symmetric_and_wider_than_old():
+    # Old slant was one-directional and narrow (-0.22..-0.18); the new default shear range
+    # (-0.3, 0.3) tilts x BOTH ways and reaches a larger magnitude. dx = 2 * shear_factor.
+    base = np.array([[0.0, 1.0, 1], [0.0, -1.0, 1]])  # vertical segment: x' = x + factor*y
+    dx = []
+    for s in range(200):
+        np.random.seed(s)
+        o = d.random_horizontal_shear(base.copy(), shear_range=(-0.3, 0.3))
+        dx.append(o[0, 0] - o[1, 0])
+    dx = np.array(dx)
+    assert dx.min() < -0.3 and dx.max() > 0.3  # both directions, wider than the old range
+    assert np.all(np.abs(dx) <= 0.6 + 1e-9)  # bounded by 2 * 0.3
