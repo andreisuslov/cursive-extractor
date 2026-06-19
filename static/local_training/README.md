@@ -185,3 +185,40 @@ the capacity/schedule of the **full cloud training (~125k steps)**, which absorb
 — not a ~7k-step laptop model. The wide band is still reachable by passing explicit ranges to
 `augment_stroke`, and any future re-widening of the *default* is caught by
 `test_augment_default_slant_is_symmetric_and_moderate` (asserts the default shear stays ≤ 0.2).
+
+## legible default, trained LONGER (`legible_30k_01..03.png`)
+
+The mild default is legible but the A/B above only ran ~7k steps. This is the **mild default
+augmentation trained 30k steps** to test whether legibility recovers with a longer schedule (no
+wide/aug-level override — the default mild band, shear ±0.08, height 0.93–1.08):
+
+```
+python3 scripts/train_local.py --dataset bigbank --max_seq_length 512 \
+  --step_lr_every 5000 --lr_decay 0.5 --steps 30000 --max_new_tokens 700
+```
+
+- device MPS, 30000 steps, **~71.9 min** (144 ms/step), truncation ~23%
+- train loss 6.46 → 1.24, **best test loss 1.38** (final 1.40); lr 1e-2 → 3.1e-4 over five StepLR decays
+- loss converged near ~1.40 by ~step 19k; the last two decays bought little
+
+**Honest read — legibility clearly recovered for the general case, not universally.** Best test
+loss **1.38 is the lowest of any augmented run here** (wide was 2.00–2.08, the 7k mild A/B was
+1.54) and decisively beats the wide band. On letter-varied content the model now writes clean,
+readable cursive: `legible_30k_02.png` ("vins! qrrtncb", an auto-sampled prompt) is smooth
+legible cursive, and in `legible_30k_01.png` ("writing summer cursive morning") the words
+**"cursive" and "morning" read clearly** — a stark contrast to the wide-aug `bigbank_varied_*`
+strips where "writing" broke into "writ"/"wovié" and "summer" was a degenerate zigzag with flat
+tails. `legible_30k_03.png` ("cursive morning") shows a legible "morning" with a clean **g**
+descender loop.
+
+Caveats kept honest: (1) **minim-heavy words stay rough** — "writing"/"summer" (nearly all
+i/t/m/u/n minims) still render as ambiguous sawtooth, though that is *partly intrinsic* to those
+words in cursive, and the strokes are smoother/less broken than the wide-aug versions. (2) Some
+warmup **seeds still produce a degenerate trailing stroke** (an oversized descender or off-canvas
+sweep) — the `--max_new_tokens 700` budget leaves room for late generation to wander; reduced
+vs wide, not eliminated. So: longer training on the legible default *recovers legibility* (loss
+and letterforms both improve markedly over wide aug), with the remaining roughness confined to
+minim-heavy words and occasional trailing artifacts.
+
+Regenerate (checkpoint + fresh PNGs land in the gitignored `runs/`):
+`python3 scripts/train_local.py --dataset bigbank --max_seq_length 512 --step_lr_every 5000 --lr_decay 0.5 --steps 30000 --max_new_tokens 700`
