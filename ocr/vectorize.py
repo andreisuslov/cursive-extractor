@@ -93,6 +93,11 @@ def _unit(dx, dy):
     return (dx / n, dy / n) if n else (0.0, 0.0)
 
 
+# Every step in trace_component is to an 8-neighbour, so the direction is always one
+# of the 8 offsets -- precompute their unit vectors to avoid a sqrt per step.
+_UNIT = {off: _unit(*off) for off in _OFFS}
+
+
 def _nbrs_deg(pts):
     """Build the 8-connectivity adjacency list and degree for every skeleton pixel.
 
@@ -107,13 +112,19 @@ def _nbrs_deg(pts):
 
 def prune_spurs(skel, max_spur=6, iters=3):
     """Remove short endpoint branches (thinning hair off a thick-ink medial axis)
-    that attach to a junction; standalone small marks are left intact."""
+    that attach to a junction; standalone small marks are left intact.
+
+    Returns ``(skel, pts, nbrs, deg)``. When pruning settles (no spur left to cut),
+    the final ``pts``/``nbrs``/``deg`` already describe the returned skeleton and are
+    handed to ``trace_component`` rather than rebuilt; for an empty or still-changing
+    skeleton they are ``None`` and the tracer recomputes them.
+    """
     skel = skel.copy()
     for _ in range(iters):
         ys, xs = np.nonzero(skel)
         pts = set(zip(xs.tolist(), ys.tolist(), strict=False))
         if not pts:
-            break
+            return skel, None, None, None
         nbrs, deg = _nbrs_deg(pts)
         remove = set()
         for ep in [p for p in pts if deg[p] == 1]:
@@ -127,23 +138,27 @@ def prune_spurs(skel, max_spur=6, iters=3):
             if len(path) <= max_spur + 1 and deg.get(path[-1], 0) >= 3:
                 remove.update(path[:-1])  # drop spur, keep the junction pixel
         if not remove:
-            break
+            return skel, pts, nbrs, deg  # settled: describes the final skeleton
         for x, y in remove:
             skel[y, x] = 0
-    return skel
+    return skel, None, None, None
 
 
-def trace_component(skel):
+def trace_component(skel, pts=None, nbrs=None, deg=None):
     """Trace ONE connected skeleton into a single continuous path via depth-first
     walk with backtracking: prefer the straightest unvisited neighbour, and when a
     branch dead-ends, retrace back along already-drawn skeleton edges (invisible
     overlap -- no spurious lines, no pen-ups) until an unvisited branch is reached.
-    Returns ``[path]`` (one stroke) covering the whole component, or ``[]``."""
-    ys, xs = np.nonzero(skel)
-    pts = set(zip(xs.tolist(), ys.tolist(), strict=False))
-    if not pts:
-        return []
-    nbrs, deg = _nbrs_deg(pts)
+    Returns ``[path]`` (one stroke) covering the whole component, or ``[]``.
+
+    ``pts``/``nbrs``/``deg`` may be supplied by ``prune_spurs`` to skip rebuilding
+    them; they are identical to what this function derives from ``skel`` itself."""
+    if pts is None:
+        ys, xs = np.nonzero(skel)
+        pts = set(zip(xs.tolist(), ys.tolist(), strict=False))
+        if not pts:
+            return []
+        nbrs, deg = _nbrs_deg(pts)
     eps = [p for p in pts if deg[p] == 1]
     start = min(eps if eps else pts, key=lambda p: (p[0], p[1]))
 
@@ -153,8 +168,8 @@ def trace_component(skel):
     last = (0.0, 0.0)
 
     def alignment(p):  # cosine of ``last`` direction with the unit step cur->p
-        d = _unit(p[0] - cur[0], p[1] - cur[1])
-        return last[0] * d[0] + last[1] * d[1]
+        ux, uy = _UNIT[(p[0] - cur[0], p[1] - cur[1])]
+        return last[0] * ux + last[1] * uy
 
     while stack:
         cur = stack[-1]
@@ -167,12 +182,12 @@ def trace_component(skel):
             visited.add(nxt)
             stack.append(nxt)
             path.append(nxt)
-            last = _unit(nxt[0] - cur[0], nxt[1] - cur[1])
+            last = _UNIT[(nxt[0] - cur[0], nxt[1] - cur[1])]
         else:
             stack.pop()
             if stack:
                 path.append(stack[-1])  # retrace one edge backwards
-                last = _unit(stack[-1][0] - cur[0], stack[-1][1] - cur[1])
+                last = _UNIT[(stack[-1][0] - cur[0], stack[-1][1] - cur[1])]
     return [path] if len(path) >= 2 else []
 
 
@@ -195,8 +210,8 @@ def trace_ink(binary, min_area=10):
         if area < min_area:
             continue  # speck noise
         comp = (labels[y : y + h, x : x + w] == lbl).astype(np.uint8)
-        skel = prune_spurs(zhang_suen(comp))
-        for path in trace_component(skel):
+        skel, pts, nbrs, deg = prune_spurs(zhang_suen(comp))
+        for path in trace_component(skel, pts, nbrs, deg):
             strokes.append([(px + x, py + y) for px, py in path])
     strokes.sort(key=lambda s: min(p[0] for p in s))  # left-to-right reading order
     return strokes
