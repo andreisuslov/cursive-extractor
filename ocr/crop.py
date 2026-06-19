@@ -10,23 +10,23 @@ pull one box straight from a boxes JSON, without needing a vectorize pass.
 import argparse
 import json
 
-from PIL import ImageEnhance
+from PIL import Image, ImageEnhance
 
 from . import config, paths
 from .pdf_utils import crop_to_box, load_page
 
 
 def crop_box_image(
-    pdf_path,
-    boxes,
-    index,
-    page_index,
-    dpi=600,
-    padding=None,
-    pad_frac=None,
-    fit_ink=None,
-    contrast=1.0,
-):
+    pdf_path: str,
+    boxes: list[dict],
+    index: int,
+    page_index: int,
+    dpi: int = 600,
+    padding: int | None = None,
+    pad_frac: float | None = None,
+    fit_ink: bool | None = None,
+    contrast: float = 1.0,
+) -> tuple[Image.Image, str]:
     """Return ``(cropped_image, text)`` for the ``index``-th box on a page."""
     padding = config.CROP_PADDING if padding is None else padding
     pad_frac = config.CROP_PAD_FRAC if pad_frac is None else pad_frac
@@ -41,7 +41,7 @@ def crop_box_image(
     return crop, entry.get("text", "")
 
 
-def parse_args(argv=None):
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Crop one OCR box to a high-quality image")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Source PDF")
     p.add_argument("--page", type=int, default=2, help="Page number, 1-based")
@@ -74,7 +74,7 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     root = args.output_root
     version = (

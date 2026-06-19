@@ -18,8 +18,9 @@ to the drawn strokes (handy with ``--index``), ``--save`` / ``--show``.
 
 import argparse
 import json
+from collections.abc import Callable, Sequence
 
-from PIL import ImageDraw
+from PIL import Image, ImageDraw
 
 from . import config, paths
 from .pdf_utils import box_to_crop_box, load_page
@@ -27,17 +28,25 @@ from .pdf_utils import box_to_crop_box, load_page
 STROKE_COLOR = (0, 255, 0)
 
 
-def _page_mapper(width, height):
+def _page_mapper(width: int, height: int) -> Callable[[Sequence[float]], tuple[float, float]]:
     return lambda p: (p[0] * width, p[1] * height)
 
 
-def _box_mapper(box_2d, width, height, padding):
+def _box_mapper(
+    box_2d: list[int], width: int, height: int, padding: int
+) -> Callable[[Sequence[float]], tuple[float, float]]:
     left, top, right, bottom = box_to_crop_box(box_2d, width, height, padding)
     bw, bh = right - left, bottom - top
     return lambda p: (left + p[0] * bw, top + p[1] * bh)
 
 
-def overlay_strokes(page_image, data, coords="page", padding=10, width=2):
+def overlay_strokes(
+    page_image: Image.Image,
+    data: list[dict],
+    coords: str = "page",
+    padding: int = 10,
+    width: int = 2,
+) -> tuple[Image.Image, tuple[float, float, float, float] | None]:
     """Draw stroke segments on a copy of ``page_image``.
 
     Returns ``(annotated_image, bounds)`` where bounds is the pixel bounding box
@@ -76,7 +85,7 @@ def overlay_strokes(page_image, data, coords="page", padding=10, width=2):
     return img, bounds
 
 
-def parse_args(argv=None):
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Overlay a traced dataset on a PDF page")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Path to the input PDF")
     p.add_argument("--page", type=int, default=2, help="Page to render (1-based)")
@@ -105,7 +114,7 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
     dpi = args.dpi or (600 if args.coords == "box" else None)

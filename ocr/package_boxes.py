@@ -17,7 +17,7 @@ import argparse
 import json
 import os
 
-from PIL import ImageDraw
+from PIL import Image, ImageDraw
 
 from . import config, paths, qa
 from .pdf_utils import crop_to_box, load_page
@@ -26,7 +26,12 @@ from .pdf_utils import crop_to_box, load_page
 TEAL = (0, 170, 160)
 
 
-def draw_vectorized(crop_image, points, color=TEAL, width=2):
+def draw_vectorized(
+    crop_image: Image.Image,
+    points: list[list[float]],
+    color: tuple[int, int, int] = TEAL,
+    width: int = 2,
+) -> Image.Image:
     """Draw box-relative [x, y, pen] strokes onto a copy of ``crop_image``."""
     img = crop_image.copy()
     draw = ImageDraw.Draw(img)
@@ -39,18 +44,18 @@ def draw_vectorized(crop_image, points, color=TEAL, width=2):
 
 
 def package_boxes(
-    pdf_path,
-    data,
-    page,
-    version=None,
-    root=None,
-    dpi=600,
-    padding=None,
-    pad_frac=None,
-    fit_ink=None,
-    clean=None,
-    limit=None,
-):
+    pdf_path: str,
+    data: list[dict],
+    page: int,
+    version: int | None = None,
+    root: str | None = None,
+    dpi: int = 600,
+    padding: int | None = None,
+    pad_frac: float | None = None,
+    fit_ink: bool | None = None,
+    clean: bool | None = None,
+    limit: int | None = None,
+) -> int:
     """Write a per-box folder for every entry with a ``box_2d``. Returns count.
 
     With ``clean`` (default ``config.CROP_CLEAN``) box.jpg is the cleaned per-word
@@ -89,7 +94,7 @@ def package_boxes(
     return made
 
 
-def parse_args(argv=None):
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Assemble one folder per detected box")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Source PDF")
     p.add_argument("--page", type=int, default=2, help="Page number, 1-based")
@@ -121,7 +126,7 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     root = args.output_root
     version = (

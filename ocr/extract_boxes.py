@@ -22,7 +22,7 @@ from .gemini_ocr import build_model, draw_boxes_on_image, extract_with_fallback,
 from .tool import render_tool
 
 
-def parse_args(argv=None):
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="OCR PDF pages into word bounding boxes")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Path to the input PDF")
     p.add_argument(
@@ -60,7 +60,7 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     root = args.output_root
 

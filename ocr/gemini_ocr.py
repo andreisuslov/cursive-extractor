@@ -6,7 +6,7 @@ import re
 import time
 
 import google.generativeai as genai
-from PIL import ImageDraw
+from PIL import Image, ImageDraw
 
 from . import config
 
@@ -14,7 +14,7 @@ from . import config
 _TRANSIENT = ("504", "503", "Deadline", "Unavailable", "Internal", "overloaded")
 
 
-def _generate(model, parts, retries=2):
+def _generate(model: genai.GenerativeModel, parts: list, retries: int = 2):
     """generate_content with a generous client deadline and transient retry."""
     last = None
     for attempt in range(retries + 1):
@@ -71,7 +71,7 @@ transcribed text -- no commentary, no quotes, no markdown.
 """
 
 
-def grounded_ocr_prompt(tokens):
+def grounded_ocr_prompt(tokens: list[str]) -> str:
     """Detection prompt that localizes a KNOWN, NUMBERED list of tokens.
 
     The model returns each box tagged with its token NUMBER, so we map boxes to
@@ -101,7 +101,7 @@ Instructions:
 """
 
 
-def parse_indexed_boxes(text, n_tokens):
+def parse_indexed_boxes(text: str, n_tokens: int) -> dict[int, list[int]]:
     """Parse a numbered-token detection response into ``{1-based index: box}``."""
     text = _strip_fences(text)
     result = {}
@@ -141,7 +141,7 @@ _WORD_BOX_RE = re.compile(
 )
 
 
-def _strip_fences(text):
+def _strip_fences(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[A-Za-z]*\n?", "", text)
@@ -149,7 +149,7 @@ def _strip_fences(text):
     return text
 
 
-def _box_of(entry):
+def _box_of(entry: object) -> list | None:
     """Return a 4+ element box list from an entry, under any '*_2d' key."""
     if not isinstance(entry, dict):
         return None
@@ -163,7 +163,7 @@ def _box_of(entry):
     return None
 
 
-def parse_word_boxes(text):
+def parse_word_boxes(text: str) -> list[dict]:
     """Parse a model response into a list of {text, box_2d} dicts, tolerantly.
 
     Accepts any ``*_2d`` box key (the model sometimes emits ``html_2d``) and
@@ -194,7 +194,7 @@ def parse_word_boxes(text):
     return out
 
 
-def load_api_key():
+def load_api_key() -> str:
     """Return the Google API key from the environment, or raise if unset."""
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -205,7 +205,7 @@ def load_api_key():
     return api_key
 
 
-def build_model(model_name=None, json_output=True):
+def build_model(model_name: str | None = None, json_output: bool = True) -> genai.GenerativeModel:
     """Configure the Gemini client and return a model.
 
     ``temperature=0`` is essential here: at the default temperature these models
@@ -221,7 +221,7 @@ def build_model(model_name=None, json_output=True):
     return genai.GenerativeModel(model_name=model_name, generation_config=gen_config)
 
 
-def transcribe_page(model, pil_image):
+def transcribe_page(model: genai.GenerativeModel, pil_image: Image.Image) -> str:
     """Return the full plain-text transcription of a page (reading order).
 
     ``model`` should be built with ``json_output=False``.
@@ -230,13 +230,15 @@ def transcribe_page(model, pil_image):
     return response.text.strip()
 
 
-def extract_words_and_boxes(model, pil_image):
+def extract_words_and_boxes(model: genai.GenerativeModel, pil_image: Image.Image) -> list[dict]:
     """Send an image to Gemini and return a list of {text, box_2d} dicts."""
     response = _generate(model, [OCR_PROMPT, pil_image])
     return parse_word_boxes(response.text)
 
 
-def extract_words_and_boxes_grounded(model, pil_image, transcript):
+def extract_words_and_boxes_grounded(
+    model: genai.GenerativeModel, pil_image: Image.Image, transcript: str
+) -> dict[int, list[int]]:
     """Box a KNOWN numbered token list. Returns ``{1-based index: box}`` so the
     caller can map boxes to tokens by index (drift-proof)."""
     tokens = transcript.split()
@@ -244,7 +246,7 @@ def extract_words_and_boxes_grounded(model, pil_image, transcript):
     return parse_indexed_boxes(response.text, len(tokens))
 
 
-def _stroke_trace_prompt(text):
+def _stroke_trace_prompt(text: str) -> str:
     return f"""
     Task: Trace the handwriting for the text "{text}" in this image.
 
@@ -264,7 +266,7 @@ def _stroke_trace_prompt(text):
     """
 
 
-def trace_strokes(model, pil_image, text):
+def trace_strokes(model: genai.GenerativeModel, pil_image: Image.Image, text: str) -> dict:
     """Ask Gemini to trace pen strokes for ``text`` in an image crop.
 
     Returns ``{"text": ..., "strokes": [[x, y, p], ...]}`` with x/y normalized
@@ -275,7 +277,12 @@ def trace_strokes(model, pil_image, text):
     return json.loads(response.text)
 
 
-def extract_with_fallback(model, pil_image, fallback_model_name=None, transcript=None):
+def extract_with_fallback(
+    model: genai.GenerativeModel,
+    pil_image: Image.Image,
+    fallback_model_name: str | None = None,
+    transcript: str | None = None,
+) -> tuple[genai.GenerativeModel, list[dict] | dict[int, list[int]]]:
     """Run OCR, falling back to a second model on a 404 (model-not-found).
 
     If ``transcript`` is given, detection is grounded on its ordered tokens
@@ -299,7 +306,7 @@ def extract_with_fallback(model, pil_image, fallback_model_name=None, transcript
         raise
 
 
-def draw_boxes_on_image(pil_image, word_data):
+def draw_boxes_on_image(pil_image: Image.Image, word_data: list[dict]) -> Image.Image:
     """Draw the OCR bounding boxes onto ``pil_image`` in place; returns it.
 
     Mutates the image, so callers that need the original should pass a copy.

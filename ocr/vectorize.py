@@ -31,7 +31,7 @@ from . import config, paths
 from .pdf_utils import box_to_crop_box, crop_to_box, load_page
 
 
-def preprocess(gray):
+def preprocess(gray: np.ndarray) -> np.ndarray:
     """Grayscale crop -> closed binary image (white ink on black)."""
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
@@ -47,7 +47,7 @@ def preprocess(gray):
 # drawn edges at dead-ends -> one lift-free stroke per component.
 
 
-def zhang_suen(binary):
+def zhang_suen(binary: np.ndarray) -> np.ndarray:
     """Zhang-Suen thinning -> a clean 1-px skeleton (uint8 0/1). ``binary``: ink>0.
 
     Runs two alternating sub-passes until no pixel can be deleted. A contour pixel
@@ -66,8 +66,14 @@ def zhang_suen(binary):
             # P2..P9: the 8 neighbours, clockwise starting north (Zhang-Suen order).
             nb = np.stack(
                 [
-                    P[:-2, 1:-1], P[:-2, 2:], P[1:-1, 2:], P[2:, 2:],
-                    P[2:, 1:-1], P[2:, :-2], P[1:-1, :-2], P[:-2, :-2],
+                    P[:-2, 1:-1],
+                    P[:-2, 2:],
+                    P[1:-1, 2:],
+                    P[2:, 2:],
+                    P[2:, 1:-1],
+                    P[2:, :-2],
+                    P[1:-1, :-2],
+                    P[:-2, :-2],
                 ]
             )
             B = nb.sum(0)  # number of non-zero neighbours
@@ -88,7 +94,7 @@ def zhang_suen(binary):
 _OFFS = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
 
 
-def _unit(dx, dy):
+def _unit(dx: float, dy: float) -> tuple[float, float]:
     n = (dx * dx + dy * dy) ** 0.5
     return (dx / n, dy / n) if n else (0.0, 0.0)
 
@@ -98,19 +104,19 @@ def _unit(dx, dy):
 _UNIT = {off: _unit(*off) for off in _OFFS}
 
 
-def _nbrs_deg(pts):
+def _nbrs_deg(pts: set) -> tuple[dict, dict]:
     """Build the 8-connectivity adjacency list and degree for every skeleton pixel.
 
     Neighbours are listed in ``_OFFS`` order -- ``trace_component`` relies on that
     order for its tie-breaking, so it must not change.
     """
-    nbrs = {
-        (x, y): [p for dx, dy in _OFFS if (p := (x + dx, y + dy)) in pts] for (x, y) in pts
-    }
+    nbrs = {(x, y): [p for dx, dy in _OFFS if (p := (x + dx, y + dy)) in pts] for (x, y) in pts}
     return nbrs, {p: len(n) for p, n in nbrs.items()}
 
 
-def prune_spurs(skel, max_spur=6, iters=3):
+def prune_spurs(
+    skel: np.ndarray, max_spur: int = 6, iters: int = 3
+) -> tuple[np.ndarray, set | None, dict | None, dict | None]:
     """Remove short endpoint branches (thinning hair off a thick-ink medial axis)
     that attach to a junction; standalone small marks are left intact.
 
@@ -144,7 +150,12 @@ def prune_spurs(skel, max_spur=6, iters=3):
     return skel, None, None, None
 
 
-def trace_component(skel, pts=None, nbrs=None, deg=None):
+def trace_component(
+    skel: np.ndarray,
+    pts: set | None = None,
+    nbrs: dict | None = None,
+    deg: dict | None = None,
+) -> list[list[tuple[int, int]]]:
     """Trace ONE connected skeleton into a single continuous path via depth-first
     walk with backtracking: prefer the straightest unvisited neighbour, and when a
     branch dead-ends, retrace back along already-drawn skeleton edges (invisible
@@ -191,7 +202,7 @@ def trace_component(skel, pts=None, nbrs=None, deg=None):
     return [path] if len(path) >= 2 else []
 
 
-def trace_ink(binary, min_area=10):
+def trace_ink(binary: np.ndarray, min_area: int = 10) -> list[list[tuple[int, int]]]:
     """Trace a binary ink image into strokes. Pen-ups come from ink CONNECTED
     COMPONENTS (real pen-lifts: separate letters, i-dots, t-crosses), each traced
     as one continuous path. Returns strokes (lists of (x, y) pixels), reading order.
@@ -217,7 +228,9 @@ def trace_ink(binary, min_area=10):
     return strokes
 
 
-def format_strokes(strokes, crop_width, crop_height):
+def format_strokes(
+    strokes: list[list[tuple[int, int]]], crop_width: int, crop_height: int
+) -> list[list[float]]:
     """Normalize traced strokes to [0,1] and add one pen-up marker per stroke."""
     out = []
     for stroke in strokes:
@@ -238,7 +251,9 @@ def format_strokes(strokes, crop_width, crop_height):
 # --- Clean per-word crop: strip ruled lines / bands / neighbours -------------
 
 
-def remove_ruled_lines(binary, span_frac=0.8, max_thick=4):
+def remove_ruled_lines(
+    binary: np.ndarray, span_frac: float = 0.8, max_thick: int = 4
+) -> np.ndarray:
     """Remove TRUE ruled lines: thin, near-full-width horizontal runs that touch
     both side edges of the crop. Word strokes (thick, undulating, not edge-to-edge
     in a padded crop) are preserved."""
@@ -264,7 +279,9 @@ def remove_ruled_lines(binary, span_frac=0.8, max_thick=4):
     )
 
 
-def keep_target_components(binary, rect, min_area=14):
+def keep_target_components(
+    binary: np.ndarray, rect: tuple[float, float, float, float], min_area: int = 14
+) -> np.ndarray:
     """Keep ink components overlapping the (already-expanded) ``rect`` (x0,y0,x1,y1)
     in crop px; drop noise and components that hug a side edge as a tall band
     (scan-edge artifact)."""
@@ -284,7 +301,14 @@ def keep_target_components(binary, rect, min_area=14):
     return out
 
 
-def clean_word(page_image, box_2d, padding=None, pad_frac=None, tighten=True, margin=6):
+def clean_word(
+    page_image: Image.Image,
+    box_2d: list[int],
+    padding: int | None = None,
+    pad_frac: float | None = None,
+    tighten: bool = True,
+    margin: int = 6,
+) -> tuple[Image.Image, np.ndarray, tuple[int, int, int, int]]:
     """Crop a word, strip ruled lines / scan bands / neighbours, optionally tighten
     to the kept ink. Returns ``(clean_gray_PIL, clean_binary, crop_box)``.
 
@@ -338,7 +362,7 @@ def clean_word(page_image, box_2d, padding=None, pad_frac=None, tighten=True, ma
     return Image.fromarray(clean), binary, cb
 
 
-def vectorize_pil_crop(pil_crop, contrast=2.0):
+def vectorize_pil_crop(pil_crop: Image.Image, contrast: float = 2.0) -> list[list[float]]:
     """Vectorize a PIL crop -> list of normalized [x, y, state] points."""
     img = ImageEnhance.Contrast(pil_crop).enhance(contrast) if contrast else pil_crop
     bgr = np.array(img)[:, :, ::-1].copy()  # PIL RGB -> OpenCV BGR
@@ -348,7 +372,9 @@ def vectorize_pil_crop(pil_crop, contrast=2.0):
     return format_strokes(strokes, crop_width, crop_height)
 
 
-def vectorize_image_file(input_path, overlay_path=None):
+def vectorize_image_file(
+    input_path: str, overlay_path: str | None = None
+) -> list[list[tuple[int, int]]]:
     """Vectorize a standalone image file; optionally save a stroke overlay.
 
     Returns the traced strokes (lists of unnormalized (x, y) pixels).
@@ -371,16 +397,16 @@ def vectorize_image_file(input_path, overlay_path=None):
 
 
 def vectorize_boxes(
-    pdf_path,
-    boxes,
-    page_index,
-    dpi=600,
-    padding=None,
-    pad_frac=None,
-    fit_ink=None,
-    clean=None,
-    limit=None,
-):
+    pdf_path: str,
+    boxes: list[dict],
+    page_index: int,
+    dpi: int = 600,
+    padding: int | None = None,
+    pad_frac: float | None = None,
+    fit_ink: bool | None = None,
+    clean: bool | None = None,
+    limit: int | None = None,
+) -> list[dict]:
     """Add {points, metadata} to each box entry, in place. Returns ``boxes``.
 
     With ``clean`` (default ``config.CROP_CLEAN``) each word crop is cleaned
@@ -433,7 +459,7 @@ def vectorize_boxes(
     return boxes
 
 
-def parse_args(argv=None):
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Vectorize handwriting crops into stroke points")
     # single-image mode
     p.add_argument("--image", help="Vectorize a single cropped image file instead of a page")
@@ -475,7 +501,7 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
     if args.image:

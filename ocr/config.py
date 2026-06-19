@@ -11,7 +11,7 @@ import os
 _FALSEY = ("0", "false", "False", "")
 
 
-def _env_bool(name, default=True):
+def _env_bool(name: str, default: bool = True) -> bool:
     """Read a boolean flag from the environment; 0/false/empty means off."""
     return os.environ.get(name, "1" if default else "0") not in _FALSEY
 

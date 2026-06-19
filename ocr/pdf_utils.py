@@ -8,16 +8,17 @@ padding must be used when overlaying box-relative points back onto a page.
 import cv2
 import numpy as np
 from pdf2image import convert_from_path
+from PIL import Image
 
 
-def load_pages(pdf_path, dpi=None):
+def load_pages(pdf_path: str, dpi: int | None = None) -> list[Image.Image]:
     """Return a list of PIL page images (optionally rendered at a given DPI)."""
     if dpi:
         return convert_from_path(pdf_path, dpi=dpi)
     return convert_from_path(pdf_path)
 
 
-def load_page(pdf_path, page_index, dpi=None):
+def load_page(pdf_path: str, page_index: int, dpi: int | None = None) -> Image.Image:
     """Return a single PIL page image, bounds-checked (0-based index)."""
     images = load_pages(pdf_path, dpi=dpi)
     if not 0 <= page_index < len(images):
@@ -25,7 +26,9 @@ def load_page(pdf_path, page_index, dpi=None):
     return images[page_index]
 
 
-def box_to_crop_box(box_2d, width, height, padding=10, pad_frac=0.0):
+def box_to_crop_box(
+    box_2d: list[int], width: int, height: int, padding: int = 10, pad_frac: float = 0.0
+) -> tuple[int, int, int, int]:
     """Convert a 0-1000 ``[ymin,xmin,ymax,xmax]`` box to padded, clamped pixels.
 
     Padding = ``padding`` pixels PLUS ``pad_frac`` of the box's own width/height
@@ -48,15 +51,15 @@ def box_to_crop_box(box_2d, width, height, padding=10, pad_frac=0.0):
 
 
 def fit_crop_to_ink(
-    page_image,
-    box_2d,
-    padding=10,
-    pad_frac=0.0,
-    search_frac=0.45,
-    overlap_vfrac=0.18,
-    overlap_hfrac=0.03,
-    margin_frac=0.06,
-):
+    page_image: Image.Image,
+    box_2d: list[int],
+    padding: int = 10,
+    pad_frac: float = 0.0,
+    search_frac: float = 0.45,
+    overlap_vfrac: float = 0.18,
+    overlap_hfrac: float = 0.03,
+    margin_frac: float = 0.06,
+) -> tuple[int, int, int, int]:
     """Fit the crop to the word's own ink, capturing whole strokes (no clipping)
     while excluding neighbouring words/rows.
 
@@ -126,7 +129,13 @@ def fit_crop_to_ink(
     return (max(0, L + xs0 - mx), max(0, T + ys0 - my), min(W, L + xs1 + mx), min(H, T + ys1 + my))
 
 
-def crop_to_box(page_image, box_2d, padding=10, pad_frac=0.0, fit_ink=False):
+def crop_to_box(
+    page_image: Image.Image,
+    box_2d: list[int],
+    padding: int = 10,
+    pad_frac: float = 0.0,
+    fit_ink: bool = False,
+) -> tuple[Image.Image, tuple[int, int, int, int]]:
     """Crop ``page_image`` to ``box_2d``. Returns ``(crop, (left,top,right,bottom))``.
 
     With ``fit_ink=True`` the crop is fitted to the word's own ink components so

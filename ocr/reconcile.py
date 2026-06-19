@@ -9,7 +9,7 @@ crop then snaps it to ink). Result: exactly one box per transcript token.
 """
 
 
-def _estimate(prev, nxt, k, span):
+def _estimate(prev: list[int] | None, nxt: list[int] | None, k: int, span: int) -> list[int]:
     """Estimate a box for a gap, from neighbouring boxes [ymin,xmin,ymax,xmax]."""
     if prev and nxt:
         f = (k / span) if span else 0.5
@@ -23,7 +23,7 @@ def _estimate(prev, nxt, k, span):
     return [450, 450, 550, 550]  # whole page empty: center-ish
 
 
-def _infill(result):
+def _infill(result: list[dict]) -> int:
     """Fill every ``box_2d is None`` entry in place by interpolating from the
     nearest boxed neighbours, mark it ``estimated``, and return how many were filled."""
     n, count = len(result), 0
@@ -44,7 +44,7 @@ def _infill(result):
     return count
 
 
-def reconcile_indexed(index_map, tokens):
+def reconcile_indexed(index_map: dict[int, list[int]], tokens: list[str]) -> tuple[list[dict], int]:
     """Map an ``{1-based index: box}`` detection onto ``tokens``.
 
     Returns ``(boxes, n_infilled)`` where ``boxes`` has exactly ``len(tokens)``

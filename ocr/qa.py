@@ -16,7 +16,9 @@ import re
 from . import config, paths
 
 
-def collect_box_texts(pdf_path, page, version=None, root=None):
+def collect_box_texts(
+    pdf_path: str, page: int, version: int | None = None, root: str | None = None
+) -> list[str]:
     """Read every box folder's text_recognized.txt, ordered by box index."""
     pdir = paths.page_dir(pdf_path, page, version, root)
     pat = re.compile(re.escape(paths.prefix(pdf_path, page, version)) + r"_box_(\d+)$")
@@ -36,7 +38,13 @@ def collect_box_texts(pdf_path, page, version=None, root=None):
     return [t for _, t in items]
 
 
-def run_qa(pdf_path, page, version=None, root=None, write=True):
+def run_qa(
+    pdf_path: str,
+    page: int,
+    version: int | None = None,
+    root: str | None = None,
+    write: bool = True,
+) -> tuple[bool, str]:
     """Compare transcript vs concatenated box texts. Returns ``(passed, report)``."""
     tpath = paths.transcript_txt(pdf_path, page, version, root)
     transcript = ""
@@ -94,7 +102,7 @@ def run_qa(pdf_path, page, version=None, root=None, write=True):
     return passed, report
 
 
-def parse_args(argv=None):
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="QA: transcript vs concatenated box texts")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Source PDF")
     p.add_argument("--page", type=int, default=2, help="Page number, 1-based")
@@ -105,7 +113,7 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     version = (
         args.version

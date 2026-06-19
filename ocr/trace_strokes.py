@@ -11,14 +11,19 @@ model-based alternative to ``python -m ocr.vectorize``.
 import argparse
 import json
 
-from PIL import ImageDraw
+from PIL import Image, ImageDraw
 
 from . import config, paths
 from .gemini_ocr import build_model, trace_strokes
 from .pdf_utils import crop_to_box, load_page
 
 
-def draw_strokes(crop_image, strokes, color=(0, 255, 0), width=2):
+def draw_strokes(
+    crop_image: Image.Image,
+    strokes: list[list[float]],
+    color: tuple[int, int, int] = (0, 255, 0),
+    width: int = 2,
+) -> Image.Image:
     """Draw normalized [x, y, p] strokes onto a copy of ``crop_image``."""
     img = crop_image.copy()
     draw = ImageDraw.Draw(img)
@@ -32,7 +37,7 @@ def draw_strokes(crop_image, strokes, color=(0, 255, 0), width=2):
     return img
 
 
-def parse_args(argv=None):
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Trace strokes for one box via Gemini")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Source PDF")
     p.add_argument("--page", type=int, default=2, help="Page number, 1-based")
@@ -54,7 +59,7 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     root = args.output_root
     version = (

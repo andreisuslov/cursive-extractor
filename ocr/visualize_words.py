@@ -21,7 +21,7 @@ from PIL import ImageDraw
 from . import config, paths
 
 
-def parse_args(argv=None):
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Visualize word bounding boxes on a page")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Path to the input PDF")
     p.add_argument("--page", type=int, default=2, help="Page to render (1-based)")
@@ -36,7 +36,7 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
     images = convert_from_path(args.pdf)
