@@ -31,6 +31,19 @@ cursivetransformer.key
 # OCR pipeline + scraper outputs (generated artifacts: crops, overlays, datasets, PDFs)
 /outputs/
 
+# Local training byproducts (checkpoints, W&B local dir, and the runs/ output dir
+# used by scripts/train_local.py + scripts/smoke_train.py). Note: __pycache__/,
+# .pytest_cache/, and *.egg-info are already ignored above.
+*.pt
+wandb/
+runs/
+# generated sample PNGs written to the repo root by sample.save_samples
+# (anchored to root so tracked static/*.png is unaffected)
+/test_sample_*.png
+/test_topk_*.png
+/train_sample_*.png
+/train_topk_*.png
+
 /examples*
 /deprecated*
 
