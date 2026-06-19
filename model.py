@@ -297,14 +297,12 @@ class CrossAttention(nn.Module):
 class Block(nn.Module):
     """an unassuming Transformer block"""
 
-    def __init__(self, config, has_cross_attn=True):
+    def __init__(self, config):
         super().__init__()
-        self.has_cross_attn = has_cross_attn
         self.ln_1 = nn.LayerNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
-        if has_cross_attn:
-            self.ln_2 = nn.LayerNorm(config.n_embd_context)
-            self.cross_attn = CrossAttention(config)
+        self.ln_2 = nn.LayerNorm(config.n_embd_context)
+        self.cross_attn = CrossAttention(config)
         self.ln_3 = nn.LayerNorm(config.n_embd)
         self.mlp = nn.ModuleDict(
             {
@@ -318,9 +316,8 @@ class Block(nn.Module):
 
     def forward(self, x: torch.Tensor, context: torch.Tensor | None = None) -> torch.Tensor:
         x = x + self.attn(self.ln_1(x))
-        if self.has_cross_attn:
-            assert context is not None, "Expected context"
-            x = x + self.cross_attn(self.ln_2(x), context)
+        assert context is not None, "Expected context"
+        x = x + self.cross_attn(self.ln_2(x), context)
         x = x + self.mlpf(self.ln_3(x))
         return x
 

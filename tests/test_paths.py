@@ -41,7 +41,6 @@ def test_box_family():
     assert bd == "outputs/doc/page_004_2/doc_p004_2_box_007"
     assert paths.box_text(pdf, 4, 7, 2, "outputs") == os.path.join(bd, "text_recognized.txt")
     assert paths.box_image(pdf, 4, 7, 2, "outputs") == os.path.join(bd, "box.jpg")
-    assert paths.box_vectorized(pdf, 4, 7, 2, "outputs") == os.path.join(bd, "vectorized.jpg")
 
 
 def test_version_discovery(tmp_path):

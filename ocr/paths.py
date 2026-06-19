@@ -187,12 +187,6 @@ def box_image(
     return os.path.join(box_dir(pdf_path, page, index, version, root), BOX_IMAGE_FILE)
 
 
-def box_vectorized(
-    pdf_path: str, page: int, index: int, version: int | None = None, root: str | None = None
-) -> str:
-    return os.path.join(box_dir(pdf_path, page, index, version, root), BOX_VECTORIZED_FILE)
-
-
 def trace_json(
     pdf_path: str, page: int, index: int, version: int | None = None, root: str | None = None
 ) -> str:

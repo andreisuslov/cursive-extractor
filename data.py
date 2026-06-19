@@ -3,7 +3,6 @@
 ########## IMPORTS AND A FEW GLOBAL VARIABLES ##########
 
 import copy
-import functools
 import json
 import os
 import random
@@ -22,10 +21,9 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 ########## LOADING DATA AND COMBINING WORDS ##########
 
 
-@functools.lru_cache(maxsize=5)
 def load_and_parse_data(dataset_name: str) -> list:
     """Load ``data/<dataset_name>.json.zip`` and normalize each item's points (apply
-    aspect ratio, shift x to start at 0, recenter y). Cached per dataset name."""
+    aspect ratio, shift x to start at 0, recenter y)."""
     file_path = f"{CURRENT_DIR}/data/{dataset_name}.json.zip"
     print(f"Trying to load dataset file from {file_path}")
 
