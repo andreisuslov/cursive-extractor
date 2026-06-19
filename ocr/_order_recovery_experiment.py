@@ -13,6 +13,7 @@ Run: python -m ocr._order_recovery_experiment
 
 import json
 import zipfile
+from functools import cache
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -26,9 +27,16 @@ N_WORDS = 40
 SAVE_SAMPLES = [0, 5, 12, 25]  # indices to save side-by-side images
 
 
-def load_words(name="easybank", n=N_WORDS):
+@cache
+def _load_bank(name):
+    """Parse a data/<name>.json.zip bank once (read-only; cached so a bank used by
+    both run() and the sample-saving epilogue is decoded a single time)."""
     with zipfile.ZipFile(f"data/{name}.json.zip") as z:
-        data = json.load(z.open(z.namelist()[0]))
+        return json.load(z.open(z.namelist()[0]))
+
+
+def load_words(name="easybank", n=N_WORDS):
+    data = _load_bank(name)
     # spread across the set; skip tiny words
     out = []
     for it in data[:: max(1, len(data) // (n * 2))]:
@@ -174,11 +182,7 @@ if __name__ == "__main__":
     print("  --- diacritic recovery ---")
     diacritic_check(big)
     # save a few i/j/t/x sample images for visual inspection
-    import json as _json
-    import zipfile as _zip
-
-    with _zip.ZipFile("data/bigbank.json.zip") as z:
-        _d = _json.load(z.open(z.namelist()[0]))
+    _d = _load_bank("bigbank")  # already parsed by run("bigbank"); reuse the cache
     shown = 0
     for it in _d:
         w = it["metadata"].get("asciiSequence", "")
