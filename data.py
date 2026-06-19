@@ -7,6 +7,7 @@ import functools
 import json
 import os
 import random
+import warnings
 import zipfile
 from math import comb
 
@@ -263,6 +264,39 @@ class StrokeDataset(Dataset):
     def get_text_seq_length(self) -> int:
         return self.max_text_length
 
+    def count_truncated(self, sample_size: int = 256) -> tuple[int, int]:
+        """Count how many of the first ``sample_size`` examples tokenize to more than
+        ``max_seq_length - 1`` tokens -- i.e. examples that ``__getitem__`` silently
+        truncates (dropping their tail, e.g. a later word).
+
+        Read-only diagnostic: when ``augment`` is on it measures one representative
+        augmented draw and restores the global RNG state afterwards, so it changes
+        nothing the model sees. Returns ``(n_truncated, n_checked)``.
+        """
+        limit = self.max_seq_length - 1
+        n_checked = min(len(self), sample_size)
+        n_truncated = 0
+        np_state, py_state = np.random.get_state(), random.getstate()
+        try:
+            for idx in range(n_checked):
+                words = self.raw_word_strokes[idx]
+                if self.augment:  # mirror __getitem__'s per-example augmentation
+                    np.random.seed(self.args.seed + idx)
+                    random.seed(self.args.seed + idx)
+                    words = [self.augment_stroke(w.copy()) for w in words]
+                encoded = [
+                    self.encode_stroke(
+                        strokes_to_offsets(words[i], words[i - 1] if i > 0 else None)
+                    )
+                    for i in range(len(words))
+                ]
+                if len(self.concat_with_word_tokens(encoded)) > limit:
+                    n_truncated += 1
+        finally:
+            np.random.set_state(np_state)
+            random.setstate(py_state)
+        return n_truncated, n_checked
+
     def encode_stroke(self, stroke):
         # Encode magnitude and pen state together
         r_idx = np.digitize(stroke[:, 0], self.r_bins[: len(self.r_bins) // 2]) - 1
@@ -414,6 +448,24 @@ def create_datasets(args) -> tuple[StrokeDataset, StrokeDataset]:
     # wrap in dataset objects
     train_dataset = StrokeDataset(train_word_strokes, train_texts, args, name="train")
     test_dataset = StrokeDataset(test_word_strokes, test_texts, args, name="test")
+
+    # Surface silent truncation: examples longer than max_seq_length lose their tail
+    # (e.g. a later word) -- the cause of multi-word prompts dropping their last word.
+    n_trunc, n_checked = train_dataset.count_truncated()
+    if n_checked:
+        pct = 100.0 * n_trunc / n_checked
+        print(
+            f"Examples exceeding max_seq_length={args.max_seq_length} "
+            f"(silently truncated): {n_trunc}/{n_checked} sampled ({pct:.0f}%)"
+        )
+        if n_trunc:
+            warnings.warn(
+                f"{n_trunc}/{n_checked} sampled training examples exceed "
+                f"max_seq_length={args.max_seq_length} and are silently truncated "
+                f"(tail tokens -- e.g. later words -- are dropped); raise max_seq_length "
+                f"to keep full examples.",
+                stacklevel=2,
+            )
     return train_dataset, test_dataset
 
 
