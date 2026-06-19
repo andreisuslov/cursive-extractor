@@ -1,3 +1,13 @@
+"""Generate a synthetic word bank with realistic letter/punctuation statistics.
+
+Samples words from a length distribution and weighted letter frequencies, then
+sprinkles in digits, quotes, parentheses and sentence-flow punctuation at tunable
+probabilities. Writes a ``const words = [...]`` JS file (consumed by the capture
+tool) and prints a character-frequency analysis.
+
+    python make_wordbank.py --num_examples 3000 --output bigbank.txt
+"""
+
 import argparse
 import json
 import string
@@ -7,6 +17,8 @@ import numpy as np
 
 
 def generate_word_bank(args):
+    """Return a list of synthetic words built per ``args`` (lengths plus
+    letter/digit/quote/parenthesis/punctuation probabilities)."""
     letters = string.ascii_lowercase
     length_range = np.arange(args.min_length, args.max_length + 1)
     length_probs = 1 - args.length_slope * (length_range - args.min_length) / (
@@ -16,7 +28,6 @@ def generate_word_bank(args):
     length_probs[0] *= 0.5
     length_probs[1] /= 0.8
     length_probs /= length_probs.sum()
-    # print('Length probs:', length_probs)
 
     word_bank = []
     for _ in range(args.num_examples):
@@ -63,11 +74,13 @@ def generate_word_bank(args):
 
 
 def write_word_bank_to_file(word_bank, filename="synthbank.txt"):
+    """Write ``word_bank`` as a ``const words = [...];`` JS snippet to ``filename``."""
     with open(filename, "w") as f:
         f.write("const words = " + json.dumps(word_bank) + ";")
 
 
 def analyze_word_bank(word_bank, k=75):
+    """Print the first ``k`` words and the character frequency/count tables."""
     first_k_words = word_bank[:k]  # Print first k words
 
     print(f"First {k} words:")
@@ -90,7 +103,6 @@ def analyze_word_bank(word_bank, k=75):
     # Sort characters by probability (descending) and format output
     sorted_probs = sorted(char_probs.items(), key=lambda x: x[1], reverse=True)
     max_char_width = max(len(repr(char)) for char, _ in sorted_probs)
-    max(len(f"{prob:.2%}") for _, prob in sorted_probs)
 
     print("Character probabilities:")
     line_width = 0
@@ -120,7 +132,6 @@ def analyze_word_bank(word_bank, k=75):
     print("".join(sorted(all_chars, key=lambda x: -char_probs[x])))
 
 
-# python make_wordbank.py --num_examples 3000 --output 'bigbank.txt'
 def main():
     parser = argparse.ArgumentParser(description="Generate a word bank")
     parser.add_argument(

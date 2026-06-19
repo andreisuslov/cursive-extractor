@@ -1,3 +1,11 @@
+"""Scrape the American Diary Project diary pages into a single PDF.
+
+A headless Selenium Chrome session loads each gallery page, downloads the
+full-resolution scan, and assembles the images into one PDF under ``outputs/``
+(named to signify full vs partial coverage). Use ``--pages N`` to fetch only the
+first N pages.
+"""
+
 import argparse
 import os
 import shutil
@@ -20,6 +28,8 @@ OUTPUT_DIR = "outputs"
 
 
 def setup_driver():
+    """Build a headless Chrome WebDriver (working around webdriver-manager
+    occasionally returning the notices file instead of the chromedriver binary)."""
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--window-size=1920,1080")
@@ -35,6 +45,7 @@ def setup_driver():
 
 
 def download_image(url, filename):
+    """Stream ``url`` to ``filename``; return True on success, False on any error."""
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, stream=True)
@@ -53,6 +64,7 @@ def download_image(url, filename):
 
 
 def create_pdf(image_folder, output_pdf):
+    """Combine every .jpg in ``image_folder`` (sorted) into one ``output_pdf``."""
     print("Creating PDF...")
     image_files = sorted([f for f in os.listdir(image_folder) if f.endswith(".jpg")])
 
@@ -90,8 +102,7 @@ def build_output_path(total_pages):
 def main(total_pages=TOTAL_PAGES):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_pdf = build_output_path(total_pages)
-    if not os.path.exists(TEMP_FOLDER):
-        os.makedirs(TEMP_FOLDER)
+    os.makedirs(TEMP_FOLDER, exist_ok=True)
 
     driver = setup_driver()
 
