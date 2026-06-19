@@ -21,7 +21,6 @@ Two CLI modes:
 """
 
 import argparse
-import itertools
 import json
 
 import cv2
@@ -49,22 +48,32 @@ def preprocess(gray):
 
 
 def zhang_suen(binary):
-    """Zhang-Suen thinning -> clean 1-px skeleton (uint8 0/1). ``binary``: ink>0."""
+    """Zhang-Suen thinning -> a clean 1-px skeleton (uint8 0/1). ``binary``: ink>0.
+
+    Runs two alternating sub-passes until no pixel can be deleted. A contour pixel
+    is removed when its 8-neighbourhood meets the Zhang-Suen conditions: exactly one
+    0->1 transition around the ring (A == 1), 2..6 non-zero neighbours (B), and the
+    two pass-specific corner tests. The whole neighbourhood is evaluated at once with
+    numpy (the 8 neighbours stacked along a leading axis), so there is no per-pixel
+    Python loop.
+    """
     img = (binary > 0).astype(np.uint8)
     changed = True
     while changed:
         changed = False
         for step in (0, 1):
             P = np.pad(img, 1)
-            P2, P3, P4 = P[:-2, 1:-1], P[:-2, 2:], P[1:-1, 2:]
-            P5, P6, P7 = P[2:, 2:], P[2:, 1:-1], P[2:, :-2]
-            P8, P9 = P[1:-1, :-2], P[:-2, :-2]
-            seq = [P2, P3, P4, P5, P6, P7, P8, P9]
-            B = sum(seq)
-            A = np.zeros_like(img)
-            ring = [*seq, P2]
-            for a, b in itertools.pairwise(ring):
-                A += ((a == 0) & (b == 1)).astype(np.uint8)
+            # P2..P9: the 8 neighbours, clockwise starting north (Zhang-Suen order).
+            nb = np.stack(
+                [
+                    P[:-2, 1:-1], P[:-2, 2:], P[1:-1, 2:], P[2:, 2:],
+                    P[2:, 1:-1], P[2:, :-2], P[1:-1, :-2], P[:-2, :-2],
+                ]
+            )
+            B = nb.sum(0)  # number of non-zero neighbours
+            ring = np.concatenate([nb, nb[:1]])  # P2..P9 then wrap back to P2
+            A = ((ring[:-1] == 0) & (ring[1:] == 1)).sum(0)  # 0->1 transitions
+            P2, P4, P6, P8 = nb[0], nb[2], nb[4], nb[6]
             cond = (img == 1) & (B >= 2) & (B <= 6) & (A == 1)
             if step == 0:
                 cond &= (P2 * P4 * P6 == 0) & (P4 * P6 * P8 == 0)
@@ -85,8 +94,13 @@ def _unit(dx, dy):
 
 
 def _nbrs_deg(pts):
+    """Build the 8-connectivity adjacency list and degree for every skeleton pixel.
+
+    Neighbours are listed in ``_OFFS`` order -- ``trace_component`` relies on that
+    order for its tie-breaking, so it must not change.
+    """
     nbrs = {
-        (x, y): [(x + dx, y + dy) for dx, dy in _OFFS if (x + dx, y + dy) in pts] for (x, y) in pts
+        (x, y): [p for dx, dy in _OFFS if (p := (x + dx, y + dy)) in pts] for (x, y) in pts
     }
     return nbrs, {p: len(n) for p, n in nbrs.items()}
 
@@ -137,6 +151,11 @@ def trace_component(skel):
     path = [start]
     stack = [start]
     last = (0.0, 0.0)
+
+    def alignment(p):  # cosine of ``last`` direction with the unit step cur->p
+        d = _unit(p[0] - cur[0], p[1] - cur[1])
+        return last[0] * d[0] + last[1] * d[1]
+
     while stack:
         cur = stack[-1]
         cand = [n for n in nbrs[cur] if n not in visited]
@@ -144,12 +163,7 @@ def trace_component(skel):
             if last == (0.0, 0.0):
                 nxt = min(cand, key=lambda p: (p[0], p[1]))
             else:
-
-                def cont(p, cur=cur, last=last):
-                    d = _unit(p[0] - cur[0], p[1] - cur[1])
-                    return last[0] * d[0] + last[1] * d[1]
-
-                nxt = max(cand, key=cont)
+                nxt = max(cand, key=alignment)  # straightest continuation
             visited.add(nxt)
             stack.append(nxt)
             path.append(nxt)
@@ -166,15 +180,24 @@ def trace_ink(binary, min_area=10):
     """Trace a binary ink image into strokes. Pen-ups come from ink CONNECTED
     COMPONENTS (real pen-lifts: separate letters, i-dots, t-crosses), each traced
     as one continuous path. Returns strokes (lists of (x, y) pixels), reading order.
+
+    Each component is thinned and traced inside its own tight bounding box, then the
+    path is shifted back to crop coordinates. The skeleton is identical to working on
+    the full crop (everything outside the box is zero anyway), but the arrays stay
+    small -- a one-pixel i-dot no longer gets thinned across the whole word.
     """
-    n, labels = cv2.connectedComponents((binary > 0).astype(np.uint8), connectivity=8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (binary > 0).astype(np.uint8), connectivity=8
+    )
     strokes = []
     for lbl in range(1, n):
-        comp = labels == lbl
-        if int(comp.sum()) < min_area:
+        x, y, w, h, area = stats[lbl]
+        if area < min_area:
             continue  # speck noise
-        skel = prune_spurs(zhang_suen(comp.astype(np.uint8)))
-        strokes.extend(trace_component(skel))
+        comp = (labels[y : y + h, x : x + w] == lbl).astype(np.uint8)
+        skel = prune_spurs(zhang_suen(comp))
+        for path in trace_component(skel):
+            strokes.append([(px + x, py + y) for px, py in path])
     strokes.sort(key=lambda s: min(p[0] for p in s))  # left-to-right reading order
     return strokes
 
@@ -185,10 +208,14 @@ def format_strokes(strokes, crop_width, crop_height):
     for stroke in strokes:
         if len(stroke) < 2:
             continue
-        for x, y in stroke:
-            nx = round(max(0.0, min(1.0, float(x) / crop_width)), 4)
-            ny = round(max(0.0, min(1.0, float(y) / crop_height)), 4)
-            out.append([nx, ny, 1])
+        # Divide by crop size and clip to [0,1] vectorized (bit-identical IEEE ops);
+        # keep Python round() per point (numpy's round differs at half-cases).
+        xy = np.array(stroke, dtype=float)
+        xy[:, 0] /= crop_width
+        xy[:, 1] /= crop_height
+        np.clip(xy, 0.0, 1.0, out=xy)
+        for nx, ny in xy.tolist():
+            out.append([round(nx, 4), round(ny, 4), 1])
         out.append([out[-1][0], out[-1][1], 0])  # pen-up at stroke end
     return out
 
