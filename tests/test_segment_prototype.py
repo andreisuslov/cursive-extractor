@@ -84,6 +84,40 @@ def test_attach_diacritics_by_x_centre():
     assert len(out[0]) == 1 and len(out[1]) == 0 and len(out[2]) == 1
 
 
+def test_is_connected_blob_true_for_one_fullwidth_component():
+    # one full-height bar spanning the whole width -> a single ligature-joined blob.
+    b = np.zeros((40, 100), np.uint8)
+    b[8:32, 5:95] = 255
+    assert sp.is_connected_blob(b, 5.0, 94.0)
+    # two well-separated components -> normal multi-component word, not a blob.
+    b2 = np.zeros((40, 100), np.uint8)
+    b2[8:32, 5:35] = 255
+    b2[8:32, 65:95] = 255
+    assert not sp.is_connected_blob(b2, 5.0, 94.0)
+
+
+def test_max_cut_gap_flags_an_uncut_letter_run():
+    # cuts packed at the left leave a wide run on the right -> large gap (x-density's
+    # failure signature on a blob); evenly spaced cuts stay near one letter-width.
+    assert sp.max_cut_gap([10.0, 20.0, 30.0], 0.0, 100.0) == 70.0
+    assert sp.max_cut_gap([25.0, 50.0, 75.0], 0.0, 100.0) == 25.0
+
+
+def test_topology_cut_score_peaks_at_baseline_connector():
+    # Two tall "letters" joined by a thin low baseline connector: the skeleton upper
+    # envelope dips to the baseline only at the connector, so the score must peak
+    # there (a ligature cut), not on the tall stems.
+    h, w = 50, 120
+    b = np.zeros((h, w), np.uint8)
+    b[8:41, 15:28] = 255  # letter 1 (tall)
+    b[8:41, 92:105] = 255  # letter 2 (tall)
+    b[36:40, 28:92] = 255  # thin near-baseline connector
+    score = sp.topology_cut_score(b, 15.0, 104.0)
+    peak = int(np.argmax(score))
+    assert 30 < peak < 90  # falls inside the connector span
+    assert score[peak] > score[21]  # connector scores above the stem centre
+
+
 def test_ensure_count_x_forces_exact_distinct_count():
     assert sp._ensure_count_x([20.0, 20.0, 80.0], 3, 0.0, 100.0) == sorted(
         sp._ensure_count_x([20.0, 20.0, 80.0], 3, 0.0, 100.0)

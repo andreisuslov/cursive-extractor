@@ -36,8 +36,19 @@ Algorithm:
   0. LOAD + LETTER SLOTS  -- ``L = len(word)``; ``L == 1`` -> emit whole word.
   1. CLEAN + LIVE TRACE   -- ``clean_word`` + central-band mask -> ``trace_ink``.
   2. CLASSIFY components  -- split BODY runs from DIACRITICS (dots / crosses).
-  3. X CUT PROFILE        -- per-column cut score over x from the ink profile
-                             (thin column + compact vertical extent + baseline band).
+  3. CUT PROFILE          -- per-column cut score over x. The normal MULTI-component
+                             word uses the ink profile (thin column + compact vertical
+                             extent + baseline band). A word that is ONE ligature-joined
+                             connected stroke (e.g. *translate* -- a whole cursive line
+                             with no pen-gaps) is x-density's weak case: the profile is
+                             flat, so cuts pile onto the few incidental gaps and leave
+                             whole letter-runs uncut. For that case ONLY we fall back to
+                             a STROKE-TOPOLOGY score (``topology_cut_score``): the
+                             Zhang-Suen skeleton's UPPER ENVELOPE dips to the baseline at
+                             the low, thin connectors between letters and lifts into the
+                             x-height/ascender zone inside a letter, so its height-minima
+                             are the ligature cuts. The transcription still supplies the
+                             ``L-1`` count and the DP still places the boundaries.
   4. EXPECTED X           -- per-char width prior -> expected boundary x-positions.
   5. TRANSCRIPTION DP      -- choose L-1 monotone x-boundaries maximising
                              sum(score) - lambda * (x-residual)^2 (banded over x).
@@ -52,7 +63,7 @@ CLI::
         [--version N] [--box III] [--min-conf 0.4] [--dpi 600]
 
 With no ``--box`` it segments a default sample of page-4 words and writes the
-colour overlays to ``runs/seg_proto3_<word>.png`` for visual QA.
+colour overlays to ``runs/seg_proto4_<word>.png`` for visual QA.
 """
 
 import argparse
@@ -364,6 +375,84 @@ def cut_score_profile(binary: np.ndarray, x_min: float, x_max: float) -> np.ndar
     # light 3-tap smooth so a 1-px valley reads as a small high plateau.
     kernel = np.array([0.25, 0.5, 0.25])
     score = np.convolve(np.pad(score, 1, mode="edge"), kernel, mode="valid")
+    return np.clip(score, 0.0, 1.0)
+
+
+# --- Step 3b: stroke-topology cut score (single connected-stroke fallback) ---
+# Tunables for the connected-blob gate + the envelope smoothing windows.
+BLOB_AREA_FRAC = 0.9  # one component holding >= this share of ink -> blob
+BLOB_SPAN_FRAC = 0.9  # ...and spanning >= this share of the word width
+BLOB_XDENS_MAXGAP = 1.8  # ...and x-density leaves a cut-gap > this * one letter-width
+ENV_SMOOTH = 11  # upper-envelope smoothing window (px), odd
+PEAK_SPREAD = 7  # widen each envelope-valley peak by this many px, odd
+
+
+def is_connected_blob(binary: np.ndarray, x_min: float, x_max: float) -> bool:
+    """True when ONE connected component holds ~all the ink AND spans ~the whole
+    word width -- a single ligature-joined cursive stroke (the case x-density cuts
+    cannot crack). Diacritics are tiny separate components and don't trip this."""
+    n, _labels, stats, _ = cv2.connectedComponentsWithStats((binary > 0).astype(np.uint8), 8)
+    if n <= 1:
+        return False
+    areas = stats[1:, cv2.CC_STAT_AREA].astype(float)
+    k = 1 + int(areas.argmax())
+    span = max(1.0, x_max - x_min)
+    return bool(
+        areas.max() / areas.sum() >= BLOB_AREA_FRAC
+        and stats[k, cv2.CC_STAT_WIDTH] / span >= BLOB_SPAN_FRAC
+    )
+
+
+def max_cut_gap(boundaries: list[float], x_min: float, x_max: float) -> float:
+    """Widest span between consecutive cuts (word ends included). A blob whose
+    x-density cuts leave a gap far wider than one letter has a multi-letter run
+    left uncut -- x-density's failure signature, the trigger for the topology cut."""
+    cuts = np.asarray([x_min, *sorted(boundaries), x_max], dtype=float)
+    return float(np.max(np.diff(cuts))) if cuts.size > 1 else (x_max - x_min)
+
+
+def topology_cut_score(binary: np.ndarray, x_min: float, x_max: float) -> np.ndarray:
+    """Per-column cut score in [0, 1] for ONE ligature-joined connected stroke.
+
+    Zhang-Suen skeleton -> UPPER ENVELOPE ``top_y[x]`` (the topmost skeleton pixel
+    per column). Inside a letter the envelope is lifted into the x-height/ascender
+    zone (small y); at a between-letter connector the whole stroke drops to the
+    baseline (large y). So the envelope's height-VALLEYS (local maxima of ``top_y``)
+    are the ligatures -- we score those columns by how LOW the envelope sits there,
+    and (as in the x-density profile) an empty interior column is a real pen gap and
+    scores 1. The non-monotonic trace never enters -- this is a pure function of x.
+    """
+    h, w = binary.shape
+    ink = binary > 0
+    skel = vectorize.zhang_suen(binary) > 0
+    if not skel.any():  # nothing to skeletonise -> let the caller use x-density
+        return cut_score_profile(binary, x_min, x_max)
+    col = skel.sum(axis=0).astype(float)
+    rows = np.arange(h)[:, None].astype(float)
+    top_y = np.where(skel, rows, float(h)).min(axis=0)  # upper envelope
+
+    ys = np.nonzero(ink.any(axis=1))[0]
+    y_top = float(ys.min()) if ys.size else 0.0
+    baseline = float(np.percentile(np.nonzero(ink)[0], 82)) if ink.any() else h / 2.0
+    hword = max(baseline - y_top, 1.0)
+
+    # interpolate the envelope across skeleton-free columns, then smooth it.
+    valid = col > 0
+    top_y[~valid] = np.interp(np.flatnonzero(~valid), np.flatnonzero(valid), top_y[valid])
+    pad = ENV_SMOOTH // 2
+    env = np.convolve(np.pad(top_y, pad, mode="edge"), np.ones(ENV_SMOOTH) / ENV_SMOOTH, "valid")
+
+    lowness = np.clip((env - y_top) / hword, 0.0, 1.0)
+    valley = np.zeros(w, dtype=bool)  # local maxima of envelope height = ligatures
+    valley[1:-1] = (env[1:-1] >= env[:-2]) & (env[1:-1] >= env[2:])
+    score = np.where(valley, lowness, 0.0)
+    spad = PEAK_SPREAD // 2
+    kern = np.ones(PEAK_SPREAD) / PEAK_SPREAD
+    score = np.convolve(np.pad(score, spad, mode="edge"), kern, "valid")
+
+    xi0, xi1 = max(0, int(np.floor(x_min))), min(w - 1, int(np.ceil(x_max)))
+    gap = (ink.sum(axis=0) == 0) & (np.arange(w) >= xi0) & (np.arange(w) <= xi1)
+    score[gap] = 1.0
     return np.clip(score, 0.0, 1.0)
 
 
@@ -703,13 +792,30 @@ def segment_word(
     if x_max - x_min < 2:
         return _qa(word, L, 0, 0, 0.0, True, 0, error="degenerate x-span")
 
-    score = cut_score_profile(binary, x_min, x_max)  # Step 3
     col = column_ink_counts(binary)
     x_expected = expected_boundary_x(word, x_min, x_max)  # Step 4
-    cand_x, cand_score = grid_candidates(score, x_min, x_max)
     min_gap = 0.40 * (x_max - x_min) / L  # keep boundaries off the same pen-gap
-    bxs = dp_boundaries_x(cand_x, cand_score, x_expected, x_min, x_max, min_gap)  # Step 5
-    bxs = _ensure_count_x(bxs, L - 1, x_min, x_max)
+
+    def cuts_for(profile: np.ndarray) -> list[float]:
+        cand_x, cand_score = grid_candidates(profile, x_min, x_max)
+        b = dp_boundaries_x(cand_x, cand_score, x_expected, x_min, x_max, min_gap)  # Step 5
+        return _ensure_count_x(b, L - 1, x_min, x_max)
+
+    # Step 3: x-density profile (the normal path). On ONE ligature-joined connected
+    # stroke x-density can pile its cuts onto a few incidental pen-gaps and leave a
+    # whole multi-letter run uncut; detect that (a blob whose widest cut-gap exceeds
+    # ~one letter * BLOB_XDENS_MAXGAP) and ONLY then fall back to the skeleton
+    # upper-envelope topology score. So a connected word x-density already cuts well
+    # (e.g. *the*) is untouched -- the fallback fires for the genuine failure (e.g.
+    # *translate*, a whole cursive line with no real between-letter gaps).
+    score = cut_score_profile(binary, x_min, x_max)
+    bxs = cuts_for(score)
+    if (
+        is_connected_blob(binary, x_min, x_max)
+        and max_cut_gap(bxs, x_min, x_max) > BLOB_XDENS_MAXGAP * (x_max - x_min) / L
+    ):
+        score = topology_cut_score(binary, x_min, x_max)
+        bxs = cuts_for(score)
 
     groups = slice_by_x(body, bxs, L)  # Step 6
     groups = attach_diacritics_x(groups, bxs, diacritics, L)
@@ -785,7 +891,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--runs-dir",
         default="runs",
-        help="Where to write seg_proto3_<word>.png overlays (sample mode)",
+        help="Where to write seg_proto4_<word>.png overlays (sample mode)",
     )
     return p.parse_args(argv)
 
@@ -852,7 +958,7 @@ def main(argv: list[str] | None = None) -> None:
             except (IndexError, KeyError):
                 continue
             word = word or expected
-            run_overlay = os.path.join(args.runs_dir, f"seg_proto3_{paths.slugify(word)}.png")
+            run_overlay = os.path.join(args.runs_dir, f"seg_proto4_{paths.slugify(word)}.png")
             qa = segment_word(
                 page_image,
                 box_2d,
