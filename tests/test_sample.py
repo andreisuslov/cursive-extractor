@@ -12,8 +12,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from data import StrokeDataset
 from model import Transformer
-from sample import GenerationParams, generate, plot_strokes, word_offsets_to_points
+from sample import (
+    GenerationParams,
+    generate,
+    generate_helper_fn,
+    plot_strokes,
+    word_offsets_to_points,
+)
 
 # Tiny CPU config (n_embd_context == n_embd is required by the model).
 TINY = SimpleNamespace(
@@ -135,3 +142,71 @@ def test_plot_strokes_all_pen_up_draws_nothing():
     fig, ax = plot_strokes(stroke, "empty")
     assert len(ax.get_lines()) == 0
     plt.close(fig)
+
+
+# --- generate_helper_fn warmup budget (regression) ------------------------------
+
+# A long warmup word must not collapse generation to an empty word. generate()'s
+# max_new_tokens is the TOTAL target length (it appends only max_new_tokens -
+# idx.size(1) tokens), so generate_helper_fn must pass params.num_steps directly. It
+# used to pre-subtract the warmup length, which generate() then subtracted again:
+# when the (randomly chosen) warmup word was long enough that warmup >= num_steps/2,
+# zero tokens were generated and the word -- and a single-word render entirely --
+# came out blank.
+
+_HELPER_ALPHABET = " abcdefghijklmnopqrstuvwxyz"
+
+
+def _pen_down_line(n):
+    """An n-point pen-down stroke; one word of n points tokenizes to ~2n tokens."""
+    return np.array([[i * 0.01, 0.0, 1] for i in range(n)], dtype=float)
+
+
+def _single_example_dataset():
+    args = SimpleNamespace(
+        alphabet=_HELPER_ALPHABET,
+        augment=False,  # deterministic tokenization
+        max_seq_length=200,
+        seed=0,
+        downsample_mean=0.65,
+        downsample_width=0.0,
+    )
+    # One 2-word seed example whose FIRST word is long (~92 warmup tokens). A single
+    # example means the random warmup index is deterministically 0.
+    return StrokeDataset(
+        [[_pen_down_line(45), _pen_down_line(5)]], ["longword short"], args, name="helper"
+    )
+
+
+class _DeviceOnlyModel(torch.nn.Module):
+    """Carries one parameter so generate_helper_fn can read its device; never run
+    because generate() is stubbed out in the test below."""
+
+    def __init__(self):
+        super().__init__()
+        self.p = torch.nn.Parameter(torch.zeros(1))
+
+
+def test_generate_helper_fn_long_warmup_is_not_blank(monkeypatch):
+    ds = _single_example_dataset()
+    captured = {}
+
+    def fake_generate(model, idx, context, max_new_tokens, **kwargs):
+        # Faithful to the real contract: output length == max(idx_len, max_new_tokens),
+        # appending valid (token 0) stroke tokens.
+        captured["max_new_tokens"] = max_new_tokens
+        pad = max(0, max_new_tokens - idx.size(1))
+        extra = torch.zeros((idx.size(0), pad), dtype=idx.dtype)
+        return torch.cat([idx, extra], dim=1)
+
+    monkeypatch.setattr("sample.generate", fake_generate)
+
+    # warmup is ~92 tokens; num_steps=140 -> old double-subtraction generated 0 tokens.
+    params = GenerationParams(
+        n_at_a_time=1, n_words=2, num_steps=140, do_sample=False, verbose=False
+    )
+    _ascii_context, offset_samp = generate_helper_fn(_DeviceOnlyModel(), ds, ["word"], params)
+
+    assert captured["max_new_tokens"] == params.num_steps  # full budget, not pre-subtracted
+    assert len(offset_samp) == 1
+    assert offset_samp[0].shape[0] > 0  # the word is non-empty (would be 0 with the bug)

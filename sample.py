@@ -209,12 +209,16 @@ def generate_helper_fn(model, dataset, word_list, params):
     context = context.to(model_device)
     X_init = first_word_tokens.unsqueeze(0).to(model_device)
 
-    steps = params.num_steps - X_init.size(1)
+    # generate()'s max_new_tokens is the TOTAL target length (it appends only
+    # max_new_tokens - idx.size(1) tokens), so pass num_steps directly -- matching
+    # save_samples. Pre-subtracting the warmup length here double-counted it, so for a
+    # long warmup word (warmup >= num_steps/2) zero tokens were generated and the word
+    # rendered blank (the single-word render was all-blank for exactly this reason).
     X_samp = generate(
         model,
         X_init,
         context,
-        steps,
+        params.num_steps,
         temperature=params.temperature,
         top_k=params.top_k,
         do_sample=params.do_sample,
