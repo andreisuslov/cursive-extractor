@@ -29,6 +29,40 @@ Sample
 * Or use the sampling code in the [Colab notebook](https://colab.research.google.com/github/greydanus/cursivetransformer/blob/main/train_sample_visualize.ipynb) to make more sophisticated samples
 
 
+## Local development
+
+You don't need a GPU or a Weights & Biases account to work on the code. The repo runs on **CPU or Apple-Silicon MPS** with W&B fully disabled.
+
+```bash
+# setup (CPU/MPS — no CUDA needed). Add `-r requirements.txt` for the full deps.
+pip install torch ruff pytest wandb
+
+# run the test suite — 61 fast unit/regression tests, no network or GPU
+python3 -m pytest -q
+
+# lint and auto-format
+python3 -m ruff check .        # should print: All checks passed!
+python3 -m ruff format         # auto-format the code
+
+# end-to-end smoke: trains a tiny model a few steps and samples, on MPS/CPU,
+# with W&B disabled (no login) — a fast proof the whole pipeline runs locally
+python3 scripts/smoke_train.py
+```
+
+`scripts/smoke_train.py` auto-selects the device (CUDA → MPS → CPU), loads a tiny subset of `data/easybank.json.zip`, runs a handful of real training steps (loss should decrease), and generates one sample via `sample.py` — finishing in a few seconds. It sets `WANDB_MODE=disabled`, so nothing is logged or uploaded.
+
+To run the real `train.py` locally, point it at a device and disable W&B the same way (`n_embd_context` must equal `n_embd`):
+
+```bash
+WANDB_MODE=disabled WANDB_API_KEY=disabled python train.py --device mps \
+  --dataset_name easybank --train_size 128 --test_size 32 --num_words 2 \
+  --batch_size 8 --n_layer 2 --n_embd 32 --n_embd_context 32 --n_ctx_head 4 \
+  --max_seq_length 200 --max_steps 12 --log_every 50 --print_every 3
+```
+
+(For the scanned-PDF OCR dataset pipeline, see [`ocr/README.md`](ocr/README.md).)
+
+
 ## Making a dataset
 
 Let's construct a dataset of cursive pen strokes for training a handwriting model. We don't have an e-pen or any special hardware. Also, someday we want to allow people to clone their own handwriting in a demo. Thus we will use a strictly trackpad/mouse-based interface. This interface is defined in the self-contained `collect.html` which is a simple webpage that allows users to enter handwriting samples. It can prompt them with words from a word bank if desired. When they are finished entering samples, they can export the result to a JSON file. We experimented with a couple different approaches to dataset generation (tracing from pictures of cursive, writing multiple words at once, writing single words and then later stitching them together...) so this interface supports them all.

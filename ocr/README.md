@@ -69,14 +69,15 @@ processes only the first N words of the page — handy for sampling a page cheap
 
 | File | Role |
 |------|------|
-| `config.py` | Default PDF path, page range, model names (env-overridable). |
+| `config.py` | Defaults — PDF path, page range, Gemini model names, and crop padding / fit-ink / **cleaning** flags (all env-overridable, e.g. `OCR_CROP_CLEAN`). |
 | `paths.py` | The output layout — per-PDF/per-page folders and origin-stamped filenames. |
 | `pdf_utils.py` | Shared: load PDF pages; map 0-1000 `box_2d` to padded pixel crops. |
 | `gemini_ocr.py` | Gemini word/box OCR (`extract_words_and_boxes`, `extract_with_fallback`), `draw_boxes_on_image`, and `trace_strokes`. |
+| `reconcile.py` | Map indexed grounded detection back to transcript tokens **by index**, infilling any token the model missed (flagged `estimated`). |
 | `tool.py` | `render_tool(words)` — inject a word bank into the HTML capture tool. |
 | `handwriting_tool.html` | The browser tracing/capture tool (React, self-contained); `__WORD_BANK_JSON__` is the injection point. |
 | `extract_boxes.py` | **CLI** — per page: transcribe (→ `transcript.txt` + counts) **and** detect word+punctuation boxes. |
-| `vectorize.py` | **CLI** — skeletonize cropped ink into `(x, y, pen)` stroke points (batch over a page, or a single image). |
+| `vectorize.py` | **CLI** — recover `(x, y, pen)` strokes from cropped ink: ink connected-components → 1-px Zhang-Suen skeleton → continuous DFS trace, with optional per-word crop cleaning + a safety gate (batch over a page, or a single image). |
 | `package_boxes.py` | **CLI** — one folder per box: `text_recognized.txt`, `box.jpg`, `vectorized.jpg` (teal overlay); runs QA. |
 | `qa.py` | **CLI** — check the transcript equals the concatenation of all `text_recognized.txt`. |
 | `crop.py` | **CLI** — crop a single OCR box to a high-DPI image. |
@@ -87,7 +88,7 @@ processes only the first N words of the page — handy for sampling a page cheap
 ## Pipeline
 
 `extract_boxes` (transcribe page + detect word/punctuation boxes) → `vectorize`
-(OpenCV skeletonization → `strokes.json`) → `package_boxes` (one folder per box,
+(Zhang-Suen skeleton + DFS stroke trace → `strokes.json`) → `package_boxes` (one folder per box,
 then **QA**: the transcript must equal the concatenation of all
 `text_recognized.txt`, token for token). `verify_dataset` gives an optional
 whole-page overlay; the browser tool / `trace_strokes` are the manual / Gemini
@@ -115,6 +116,26 @@ descender that merges into the next line from pulling in a whole adjacent row.
 `vectorize` and `package_boxes` share these crop settings so the teal overlay
 stays aligned; disable with `--no-fit-ink`.
 
+**Stroke recovery.** `vectorize` turns a word crop into ordered `(x, y, pen)`
+points: it thresholds the ink, splits it into **connected components** (each a
+real pen-lift — separate letters, i-dots, t-crossbars), thins each to a 1-px
+**Zhang-Suen skeleton**, and traces it as a single continuous **depth-first
+path** (retracing back over already-drawn edges at dead-ends, so there are no
+fabricated pen-ups and no spurious lines). This recovers exactly the lifts that
+are *physically separable* from a static image — replacing the older greedy
+nearest-neighbour skeleton tracer, which shattered one cursive word into ~95
+fragments. The QA harness `ocr._order_recovery_experiment` measures the fidelity.
+
+**Crop cleaning + safety gate** (`config.CROP_CLEAN`, on by default; disable with
+`OCR_CROP_CLEAN=0`). Before tracing, `vectorize.clean_word` strips ruled lines and
+scan-edge bands and keeps only the target word's ink (neighbouring words removed),
+so a dense, ruled page still yields clean per-word strokes. A **safety gate** then
+compares the cleaned trace against the uncleaned one and falls back to the
+uncleaned strokes whenever cleaning would *increase* the stroke count (the
+signature of a bad detection box) — so cleaning can never make a word worse. Each
+box records which path was used in `metadata["cleaned"]`, and `package_boxes` crops
+`box.jpg` to match so the overlay stays aligned.
+
 ## Usage
 
 Pass `--pdf` and `--page`; everything routes through the canonical layout above.
@@ -125,7 +146,7 @@ PDF=data/content/test_document.pdf
 # 1. Transcribe + detect boxes on page 4 (first run -> page_004; re-runs -> page_004_1, _2, ...)
 python -m ocr.extract_boxes --pdf "$PDF" --start-page 4 --end-page 4 --no-tool
 
-# 2. Vectorize the page -> ..._strokes.json   (OpenCV skeletonization)
+# 2. Vectorize the page -> ..._strokes.json   (Zhang-Suen skeleton + DFS trace)
 python -m ocr.vectorize --pdf "$PDF" --page 4
 
 # 3. One folder per box (text_recognized.txt, box.jpg, vectorized.jpg) + QA
@@ -140,6 +161,22 @@ python -m ocr.extract_boxes --pdf "$PDF" --start-page 4 --end-page 4 --limit 15 
 
 Override any default with `--boxes`, `--strokes`, `--output`, `--save`, or
 `--output-root`; target a specific package with `--version N`.
+
+## Development & QA helpers
+
+Two `_`-prefixed modules support tuning the vectorizer; they are **not** part of the
+dataset pipeline and need no Gemini key:
+
+```bash
+# Fidelity check: render easybank/bigbank ground-truth words to clean rasters, run them
+# back through `vectorize`, and report visual IoU, fabricated pen-ups, path-length ratio,
+# x-reversals, and i/j/t/x diacritic recovery. This is the regression behind stroke recovery.
+python -m ocr._order_recovery_experiment
+
+# Visual inspection: overlay the recovered strokes on the original ink (one colour per
+# stroke, a dot at each stroke start) -> /tmp/overlay_*.png.
+python -m ocr._overlay_inspect
+```
 
 ## Where the old scripts went
 
