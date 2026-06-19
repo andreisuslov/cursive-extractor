@@ -1,8 +1,8 @@
 """Gemini-backed word-level OCR with bounding boxes."""
 
+import json
 import os
 import re
-import json
 import time
 
 import google.generativeai as genai
@@ -19,9 +19,8 @@ def _generate(model, parts, retries=2):
     last = None
     for attempt in range(retries + 1):
         try:
-            return model.generate_content(
-                parts, request_options={"timeout": config.GEMINI_TIMEOUT})
-        except Exception as e:  # noqa: BLE001 - inspect provider error text
+            return model.generate_content(parts, request_options={"timeout": config.GEMINI_TIMEOUT})
+        except Exception as e:
             msg = str(e)
             if any(t in msg for t in _TRANSIENT) and attempt < retries:
                 print(f"Transient Gemini error ({msg[:50]}...); retry {attempt + 1}/{retries}")
@@ -30,6 +29,7 @@ def _generate(model, parts, retries=2):
                 continue
             raise
     raise last
+
 
 # Boxes come back as [ymin, xmin, ymax, xmax] normalized to a 0-1000 scale.
 OCR_PROMPT = """
@@ -89,7 +89,8 @@ The page text, in reading order, as a NUMBERED list (number. token):
 Instructions:
 1. For each numbered token, find that exact word on the page and return its box,
    tagged with the SAME number.
-2. Return a raw JSON array of objects {{"index": <token number>, "box_2d": [ymin, xmin, ymax, xmax]}}.
+2. Return a raw JSON array of objects
+   {{"index": <token number>, "box_2d": [ymin, xmin, ymax, xmax]}}.
 3. "index" MUST be the token's number from the list above (1..{len(tokens)}).
    Return one object per token you can locate. If a token genuinely cannot be
    found, omit it rather than guessing.
@@ -118,13 +119,17 @@ def parse_indexed_boxes(text, n_tokens):
     except json.JSONDecodeError:
         pass
     for m in re.finditer(
-            r'"index"\s*:\s*(\d+)[^{}]*?"\w+_2d"\s*:\s*'
-            r'\[\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)', text):
+        r'"index"\s*:\s*(\d+)[^{}]*?"\w+_2d"\s*:\s*'
+        r"\[\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)",
+        text,
+    ):
         idx = int(m.group(1))
         if 1 <= idx <= n_tokens:
-            result.setdefault(idx, [int(m.group(2)), int(m.group(3)),
-                                    int(m.group(4)), int(m.group(5))])
+            result.setdefault(
+                idx, [int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))]
+            )
     return result
+
 
 # Tolerant extractor: pulls every well-formed {"text": ..., "<k>_2d": [y,x,y,x]}
 # object out of a response, so one malformed entry or trailing junk can't sink
@@ -132,7 +137,7 @@ def parse_indexed_boxes(text, n_tokens):
 # emits "html_2d" (or similar) instead of "box_2d". Used when strict JSON fails.
 _WORD_BOX_RE = re.compile(
     r'\{\s*"text"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"\w+_2d"\s*:\s*'
-    r'\[\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\]'
+    r"\[\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\]"
 )
 
 
@@ -180,10 +185,12 @@ def parse_word_boxes(text):
 
     out = []
     for m in _WORD_BOX_RE.finditer(text):
-        out.append({
-            "text": json.loads(f'"{m.group(1)}"'),  # unescape JSON string body
-            "box_2d": [int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))],
-        })
+        out.append(
+            {
+                "text": json.loads(f'"{m.group(1)}"'),  # unescape JSON string body
+                "box_2d": [int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))],
+            }
+        )
     return out
 
 
@@ -284,7 +291,7 @@ def extract_with_fallback(model, pil_image, fallback_model_name=None, transcript
 
     try:
         return model, _detect(model)
-    except Exception as e:  # noqa: BLE001 - inspect the provider error message
+    except Exception as e:
         if "404" in str(e) and "models/" in str(e):
             print(f"Model not found; falling back to '{fallback_model_name}'...")
             model = build_model(fallback_model_name)

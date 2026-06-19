@@ -11,12 +11,12 @@ NOTE: this replaces the notebook's "View Sample Words" cell, which referenced
 undefined globals and a different schema; it now reads the pipeline's own output.
 """
 
-import json
 import argparse
+import json
 
 import matplotlib.pyplot as plt
-from PIL import ImageDraw
 from pdf2image import convert_from_path
+from PIL import ImageDraw
 
 from . import config, paths
 
@@ -25,11 +25,13 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Visualize word bounding boxes on a page")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Path to the input PDF")
     p.add_argument("--page", type=int, default=2, help="Page to render (1-based)")
-    p.add_argument("--boxes", default=None,
-                   help="Boxes JSON (default: canonical boxes for --pdf/--page)")
+    p.add_argument(
+        "--boxes", default=None, help="Boxes JSON (default: canonical boxes for --pdf/--page)"
+    )
     p.add_argument("--output-root", default=paths.OUTPUT_ROOT, help="Root output folder")
-    p.add_argument("--version", type=int, default=None,
-                   help="Page version to read (default: latest existing)")
+    p.add_argument(
+        "--version", type=int, default=None, help="Page version to read (default: latest existing)"
+    )
     p.add_argument("--num", type=int, default=3, help="How many words to show")
     return p.parse_args(argv)
 
@@ -44,7 +46,11 @@ def main(argv=None):
     image = images[page_index]
     width, height = image.size
 
-    version = args.version if args.version is not None else paths.latest_version(args.pdf, args.page, args.output_root)
+    version = (
+        args.version
+        if args.version is not None
+        else paths.latest_version(args.pdf, args.page, args.output_root)
+    )
     boxes_path = args.boxes or paths.boxes_json(args.pdf, args.page, version, args.output_root)
     with open(boxes_path) as f:
         word_data = json.load(f)

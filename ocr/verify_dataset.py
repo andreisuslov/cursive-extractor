@@ -17,13 +17,13 @@ to the drawn strokes (handy with ``--index``), ``--save`` / ``--show``.
         --coords box --page 2 --save overlay.jpg
 """
 
-import json
 import argparse
+import json
 
 from PIL import ImageDraw
 
 from . import config, paths
-from .pdf_utils import load_page, box_to_crop_box
+from .pdf_utils import box_to_crop_box, load_page
 
 STROKE_COLOR = (0, 255, 0)
 
@@ -81,13 +81,22 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Overlay a traced dataset on a PDF page")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Path to the input PDF")
     p.add_argument("--page", type=int, default=2, help="Page to render (1-based)")
-    p.add_argument("--dataset", default=None,
-                   help="Dataset JSON (default: canonical strokes for --pdf/--page)")
-    p.add_argument("--coords", choices=("page", "box"), default="box",
-                   help="Point coordinate convention; 'box' matches ocr.vectorize output")
+    p.add_argument(
+        "--dataset", default=None, help="Dataset JSON (default: canonical strokes for --pdf/--page)"
+    )
+    p.add_argument(
+        "--coords",
+        choices=("page", "box"),
+        default="box",
+        help="Point coordinate convention; 'box' matches ocr.vectorize output",
+    )
     p.add_argument("--output-root", default=paths.OUTPUT_ROOT, help="Root output folder")
-    p.add_argument("--version", type=int, default=None,
-                   help="Page version to read/write (default: latest existing)")
+    p.add_argument(
+        "--version",
+        type=int,
+        default=None,
+        help="Page version to read/write (default: latest existing)",
+    )
     p.add_argument("--index", type=int, default=None, help="Only draw this entry (0-based)")
     p.add_argument("--crop", action="store_true", help="Crop output to drawn strokes")
     p.add_argument("--dpi", type=int, default=None, help="Render DPI (use 600 for box mode)")
@@ -104,7 +113,11 @@ def main(argv=None):
     page = load_page(args.pdf, args.page - 1, dpi=dpi)
 
     root = args.output_root
-    version = args.version if args.version is not None else paths.latest_version(args.pdf, args.page, root)
+    version = (
+        args.version
+        if args.version is not None
+        else paths.latest_version(args.pdf, args.page, root)
+    )
     if version is None and not args.dataset:
         raise SystemExit("No processed version found; run ocr.vectorize first or pass --dataset.")
 
@@ -112,7 +125,7 @@ def main(argv=None):
     with open(dataset_path) as f:
         data = json.load(f)
     if args.index is not None:
-        data = data[args.index:args.index + 1]
+        data = data[args.index : args.index + 1]
     print(f"Painting {len(data)} word(s) in '{args.coords}' coords...")
 
     img, bounds = overlay_strokes(page, data, coords=args.coords, padding=args.padding)
@@ -121,8 +134,9 @@ def main(argv=None):
         pad = 50
         W, H = img.size
         left, top, right, bottom = bounds
-        img = img.crop((max(0, left - pad), max(0, top - pad),
-                        min(W, right + pad), min(H, bottom + pad)))
+        img = img.crop(
+            (max(0, left - pad), max(0, top - pad), min(W, right + pad), min(H, bottom + pad))
+        )
 
     out = args.save or paths.verify_overlay(args.pdf, args.page, args.coords, version, root)
     paths.ensure_parent(out)
@@ -131,6 +145,7 @@ def main(argv=None):
 
     if args.show:
         import matplotlib.pyplot as plt
+
         plt.figure(figsize=(20, 25))
         plt.imshow(img)
         plt.axis("off")

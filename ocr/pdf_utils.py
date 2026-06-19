@@ -5,8 +5,8 @@ OCR boxes are ``box_2d = [ymin, xmin, ymax, xmax]`` normalized to a 0-1000 scale
 padding must be used when overlaying box-relative points back onto a page.
 """
 
-import numpy as np
 import cv2
+import numpy as np
 from pdf2image import convert_from_path
 
 
@@ -21,9 +21,7 @@ def load_page(pdf_path, page_index, dpi=None):
     """Return a single PIL page image, bounds-checked (0-based index)."""
     images = load_pages(pdf_path, dpi=dpi)
     if not 0 <= page_index < len(images):
-        raise IndexError(
-            f"page index {page_index} out of range (PDF has {len(images)} pages)"
-        )
+        raise IndexError(f"page index {page_index} out of range (PDF has {len(images)} pages)")
     return images[page_index]
 
 
@@ -49,9 +47,16 @@ def box_to_crop_box(box_2d, width, height, padding=10, pad_frac=0.0):
     return left, top, right, bottom
 
 
-def fit_crop_to_ink(page_image, box_2d, padding=10, pad_frac=0.0,
-                    search_frac=0.45, overlap_vfrac=0.18, overlap_hfrac=0.03,
-                    margin_frac=0.06):
+def fit_crop_to_ink(
+    page_image,
+    box_2d,
+    padding=10,
+    pad_frac=0.0,
+    search_frac=0.45,
+    overlap_vfrac=0.18,
+    overlap_hfrac=0.03,
+    margin_frac=0.06,
+):
     """Fit the crop to the word's own ink, capturing whole strokes (no clipping)
     while excluding neighbouring words/rows.
 
@@ -118,8 +123,7 @@ def fit_crop_to_ink(page_image, box_2d, padding=10, pad_frac=0.0,
     # word even for thin/short tokens (was, are, of...).
     mx = padding + max(int(margin_frac * bw), int(0.10 * bh))
     my = padding + int(0.16 * bh)
-    return (max(0, L + xs0 - mx), max(0, T + ys0 - my),
-            min(W, L + xs1 + mx), min(H, T + ys1 + my))
+    return (max(0, L + xs0 - mx), max(0, T + ys0 - my), min(W, L + xs1 + mx), min(H, T + ys1 + my))
 
 
 def crop_to_box(page_image, box_2d, padding=10, pad_frac=0.0, fit_ink=False):

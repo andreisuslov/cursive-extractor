@@ -2,22 +2,18 @@
 
 ########## IMPORTS AND A FEW GLOBAL VARIABLES ##########
 
-import os, sys, time, getpass
-from typing import Optional
-from dataclasses import dataclass
-
-import wandb
+import os
+import sys
+import time
 
 import torch
-import torch.nn as nn
-from torch.nn import functional as F
-from torch.utils.data import Dataset
+import wandb
 from torch.utils.data.dataloader import DataLoader
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from model import get_checkpoint, save_checkpoint, get_all_args
-from sample import save_samples
 from data import InfiniteDataLoader, create_datasets
+from model import get_all_args, get_checkpoint, save_checkpoint
+from sample import save_samples
 
 
 @torch.inference_mode()
@@ -28,21 +24,19 @@ def evaluate(model, dataset, batch_size=15, max_batches=None):
     for i, batch in enumerate(loader):
         batch = [t.to(args.device) for t in batch]
         X, C, Y = batch
-        logits, loss = model(X, C, Y)
+        _logits, loss = model(X, C, Y)
         losses.append(loss.item())
         if max_batches is not None and i >= max_batches:
             break
     mean_loss = torch.tensor(losses).mean().item()
-    model.train() # reset model back to training mode
+    model.train()  # reset model back to training mode
     return mean_loss
 
 
 ########## ARGS, LOGGING, AND TRAIN LOOP ##########
 
 
-
-if __name__ == '__main__':
-
+if __name__ == "__main__":
     args = get_all_args()
     torch.manual_seed(args.seed)  # system inits
     torch.cuda.manual_seed_all(args.seed)
@@ -63,10 +57,11 @@ if __name__ == '__main__':
     print(f"Dataset determined that: {args.vocab_size=}, {args.block_size=}")
 
     model, optimizer, scheduler, step, best_loss = get_checkpoint(args, sample_only=False)
-    batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=4)
+    batch_loader = InfiniteDataLoader(
+        train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=4
+    )
 
     wandb.watch(model, log="all", log_freq=args.log_every, log_graph=False)  # model saving stuff
-
 
     ########## ARGS, LOGGING, AND TRAIN LOOP ##########
 
@@ -82,27 +77,39 @@ if __name__ == '__main__':
         logits, loss = model(X, C, Y)
 
         # calculate the gradient, update the weights
-        model.zero_grad(set_to_none=True) ; loss.backward()
-        optimizer.step() ; scheduler.step()
+        model.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
         wandb.log({"train_loss_step": loss.item(), "step": step})
         t1 = time.time()
 
         # logging
         if step % args.print_every == 0:
-            print(f"step {step} | loss {loss.item():.4f} | step time {(t1-t0)*1000:.2f}ms | lr {scheduler.get_last_lr()[0]:.6f}")
+            print(
+                f"step {step} | loss {loss.item():.4f} | "
+                f"step time {(t1 - t0) * 1000:.2f}ms | lr {scheduler.get_last_lr()[0]:.6f}"
+            )
 
         # evaluate the model
         if step > 0 and step % args.log_every == 0:
             train_loss = evaluate(model, train_dataset, batch_size=100, max_batches=10)
-            test_loss  = evaluate(model, test_dataset,  batch_size=100, max_batches=10)
-            wandb.log({"train_loss": train_loss, "test_loss": test_loss, "step": step })
+            test_loss = evaluate(model, test_dataset, batch_size=100, max_batches=10)
+            wandb.log({"train_loss": train_loss, "test_loss": test_loss, "step": step})
             print(f"step {step} train loss: {train_loss:.4f} test loss: {test_loss:.4f}")
 
-            if best_loss is None or test_loss < best_loss:  # save the model to W&B if it has improved
+            if (
+                best_loss is None or test_loss < best_loss
+            ):  # save the model to W&B if it has improved
                 best_loss = test_loss
-                print(f"Test loss {test_loss:.4f} is the best so far, saving checkpoint to {args.local_checkpoint_path}")
-                save_checkpoint(model, args.local_checkpoint_path, optimizer, scheduler, step, best_loss)
-                artifact = wandb.Artifact('best_checkpoint', type='model')
+                print(
+                    f"Test loss {test_loss:.4f} is the best so far, "
+                    f"saving checkpoint to {args.local_checkpoint_path}"
+                )
+                save_checkpoint(
+                    model, args.local_checkpoint_path, optimizer, scheduler, step, best_loss
+                )
+                artifact = wandb.Artifact("best_checkpoint", type="model")
                 artifact.add_file(args.local_checkpoint_path)
                 wandb.log_artifact(artifact)
 
@@ -119,4 +126,3 @@ if __name__ == '__main__':
             break
 
     wandb.finish()
-

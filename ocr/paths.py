@@ -87,6 +87,7 @@ def ensure_parent(path):
 
 # --- version discovery ------------------------------------------------------
 
+
 def existing_versions(pdf_path, page, root=None):
     """Sorted list of existing version numbers for a page (0 == base 'page_NNN')."""
     rd = run_dir(pdf_path, root)
@@ -116,34 +117,43 @@ def next_version(pdf_path, page, root=None):
 
 # --- artifact path builders -------------------------------------------------
 
+
 def boxes_json(pdf_path, page, version=None, root=None):
-    return os.path.join(page_dir(pdf_path, page, version, root),
-                        f"{prefix(pdf_path, page, version)}_boxes.json")
+    return os.path.join(
+        page_dir(pdf_path, page, version, root), f"{prefix(pdf_path, page, version)}_boxes.json"
+    )
 
 
 def boxes_overlay(pdf_path, page, version=None, root=None):
-    return os.path.join(page_dir(pdf_path, page, version, root),
-                        f"{prefix(pdf_path, page, version)}_boxes_overlay.jpg")
+    return os.path.join(
+        page_dir(pdf_path, page, version, root),
+        f"{prefix(pdf_path, page, version)}_boxes_overlay.jpg",
+    )
 
 
 def strokes_json(pdf_path, page, version=None, root=None):
-    return os.path.join(page_dir(pdf_path, page, version, root),
-                        f"{prefix(pdf_path, page, version)}_strokes.json")
+    return os.path.join(
+        page_dir(pdf_path, page, version, root), f"{prefix(pdf_path, page, version)}_strokes.json"
+    )
 
 
 def transcript_txt(pdf_path, page, version=None, root=None):
-    return os.path.join(page_dir(pdf_path, page, version, root),
-                        f"{prefix(pdf_path, page, version)}_transcript.txt")
+    return os.path.join(
+        page_dir(pdf_path, page, version, root), f"{prefix(pdf_path, page, version)}_transcript.txt"
+    )
 
 
 def qa_report(pdf_path, page, version=None, root=None):
-    return os.path.join(page_dir(pdf_path, page, version, root),
-                        f"{prefix(pdf_path, page, version)}_qa.txt")
+    return os.path.join(
+        page_dir(pdf_path, page, version, root), f"{prefix(pdf_path, page, version)}_qa.txt"
+    )
 
 
 def verify_overlay(pdf_path, page, coords, version=None, root=None):
-    return os.path.join(page_dir(pdf_path, page, version, root),
-                        f"{prefix(pdf_path, page, version)}_verify_{coords}.jpg")
+    return os.path.join(
+        page_dir(pdf_path, page, version, root),
+        f"{prefix(pdf_path, page, version)}_verify_{coords}.jpg",
+    )
 
 
 # Fixed filenames inside each per-box folder.
@@ -154,8 +164,10 @@ BOX_VECTORIZED_FILE = "vectorized.jpg"
 
 def box_dir(pdf_path, page, index, version=None, root=None):
     """Per-box folder, e.g. .../page_004/test_document_p004_box_000/."""
-    return os.path.join(page_dir(pdf_path, page, version, root),
-                        f"{prefix(pdf_path, page, version)}_box_{int(index):03d}")
+    return os.path.join(
+        page_dir(pdf_path, page, version, root),
+        f"{prefix(pdf_path, page, version)}_box_{int(index):03d}",
+    )
 
 
 def box_text(pdf_path, page, index, version=None, root=None):
@@ -171,13 +183,17 @@ def box_vectorized(pdf_path, page, index, version=None, root=None):
 
 
 def trace_json(pdf_path, page, index, version=None, root=None):
-    return os.path.join(page_dir(pdf_path, page, version, root),
-                        f"{prefix(pdf_path, page, version)}_trace_box_{int(index):03d}.json")
+    return os.path.join(
+        page_dir(pdf_path, page, version, root),
+        f"{prefix(pdf_path, page, version)}_trace_box_{int(index):03d}.json",
+    )
 
 
 def trace_overlay(pdf_path, page, index, version=None, root=None):
-    return os.path.join(page_dir(pdf_path, page, version, root),
-                        f"{prefix(pdf_path, page, version)}_trace_box_{int(index):03d}.jpg")
+    return os.path.join(
+        page_dir(pdf_path, page, version, root),
+        f"{prefix(pdf_path, page, version)}_trace_box_{int(index):03d}.jpg",
+    )
 
 
 def tool_html(pdf_path, root=None):

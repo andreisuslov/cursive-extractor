@@ -7,17 +7,26 @@ pull one box straight from a boxes JSON, without needing a vectorize pass.
     python -m ocr.crop --pdf data/content/test_document.pdf --page 4 --index 0
 """
 
-import json
 import argparse
+import json
 
 from PIL import ImageEnhance
 
 from . import config, paths
-from .pdf_utils import load_page, crop_to_box
+from .pdf_utils import crop_to_box, load_page
 
 
-def crop_box_image(pdf_path, boxes, index, page_index, dpi=600, padding=None,
-                   pad_frac=None, fit_ink=None, contrast=1.0):
+def crop_box_image(
+    pdf_path,
+    boxes,
+    index,
+    page_index,
+    dpi=600,
+    padding=None,
+    pad_frac=None,
+    fit_ink=None,
+    contrast=1.0,
+):
     """Return ``(cropped_image, text)`` for the ``index``-th box on a page."""
     padding = config.CROP_PADDING if padding is None else padding
     pad_frac = config.CROP_PAD_FRAC if pad_frac is None else pad_frac
@@ -37,19 +46,30 @@ def parse_args(argv=None):
     p.add_argument("--pdf", default=config.PDF_PATH, help="Source PDF")
     p.add_argument("--page", type=int, default=2, help="Page number, 1-based")
     p.add_argument("--index", type=int, default=0, help="Which box to crop (0-based)")
-    p.add_argument("--boxes", default=None,
-                   help="Boxes JSON (default: canonical boxes for --pdf/--page)")
+    p.add_argument(
+        "--boxes", default=None, help="Boxes JSON (default: canonical boxes for --pdf/--page)"
+    )
     p.add_argument("--output-root", default=paths.OUTPUT_ROOT, help="Root output folder")
-    p.add_argument("--version", type=int, default=None,
-                   help="Page version to read/write (default: latest existing)")
-    p.add_argument("--save", default=None,
-                   help="Output path (default: the box folder's box.jpg)")
+    p.add_argument(
+        "--version",
+        type=int,
+        default=None,
+        help="Page version to read/write (default: latest existing)",
+    )
+    p.add_argument("--save", default=None, help="Output path (default: the box folder's box.jpg)")
     p.add_argument("--dpi", type=int, default=600, help="Render DPI")
     p.add_argument("--padding", type=int, default=config.CROP_PADDING, help="Crop padding (px)")
-    p.add_argument("--pad-frac", type=float, default=config.CROP_PAD_FRAC,
-                   help="Extra crop padding as a fraction of box size")
-    p.add_argument("--no-fit-ink", action="store_true",
-                   help="Disable growing the box until no ink touches its borders")
+    p.add_argument(
+        "--pad-frac",
+        type=float,
+        default=config.CROP_PAD_FRAC,
+        help="Extra crop padding as a fraction of box size",
+    )
+    p.add_argument(
+        "--no-fit-ink",
+        action="store_true",
+        help="Disable growing the box until no ink touches its borders",
+    )
     p.add_argument("--contrast", type=float, default=1.0, help="Contrast boost (1.0 = none)")
     return p.parse_args(argv)
 
@@ -57,7 +77,11 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     root = args.output_root
-    version = args.version if args.version is not None else paths.latest_version(args.pdf, args.page, root)
+    version = (
+        args.version
+        if args.version is not None
+        else paths.latest_version(args.pdf, args.page, root)
+    )
     if version is None and not args.boxes:
         raise SystemExit("No processed version found; run ocr.extract_boxes first or pass --boxes.")
 
@@ -66,9 +90,15 @@ def main(argv=None):
         boxes = json.load(f)
 
     crop, text = crop_box_image(
-        args.pdf, boxes, args.index, args.page - 1,
-        dpi=args.dpi, padding=args.padding, pad_frac=args.pad_frac,
-        fit_ink=not args.no_fit_ink, contrast=args.contrast,
+        args.pdf,
+        boxes,
+        args.index,
+        args.page - 1,
+        dpi=args.dpi,
+        padding=args.padding,
+        pad_frac=args.pad_frac,
+        fit_ink=not args.no_fit_ink,
+        contrast=args.contrast,
     )
     save = args.save or paths.box_image(args.pdf, args.page, args.index, version, root)
     paths.ensure_parent(save)

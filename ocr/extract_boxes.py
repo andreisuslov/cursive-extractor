@@ -10,37 +10,53 @@ Run from the repo root:
     python -m ocr.extract_boxes --pdf data/content/test_document.pdf --start-page 1 --end-page 3
 """
 
-import os
-import json
 import argparse
+import json
+import os
 import traceback
 
 from pdf2image import convert_from_path
 
 from . import config, paths, reconcile
-from .gemini_ocr import (build_model, extract_with_fallback, draw_boxes_on_image,
-                         transcribe_page)
+from .gemini_ocr import build_model, draw_boxes_on_image, extract_with_fallback, transcribe_page
 from .tool import render_tool
 
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="OCR PDF pages into word bounding boxes")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Path to the input PDF")
-    p.add_argument("--output-root", default=paths.OUTPUT_ROOT,
-                   help="Root output folder (default: outputs/)")
-    p.add_argument("--start-page", type=int, default=config.START_PAGE_INDEX + 1,
-                   help="First page to process (1-based, inclusive)")
-    p.add_argument("--end-page", type=int, default=config.END_PAGE_INDEX,
-                   help="Last page to process (1-based, inclusive)")
+    p.add_argument(
+        "--output-root", default=paths.OUTPUT_ROOT, help="Root output folder (default: outputs/)"
+    )
+    p.add_argument(
+        "--start-page",
+        type=int,
+        default=config.START_PAGE_INDEX + 1,
+        help="First page to process (1-based, inclusive)",
+    )
+    p.add_argument(
+        "--end-page",
+        type=int,
+        default=config.END_PAGE_INDEX,
+        help="Last page to process (1-based, inclusive)",
+    )
     p.add_argument("--model", default=config.GEMINI_MODEL, help="Gemini model name")
-    p.add_argument("--grounded", action=argparse.BooleanOptionalAction, default=True,
-                   help="Ground detection on the transcript tokens (one box per word)")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Keep only the first N detected words per page")
-    p.add_argument("--version", type=int, default=None,
-                   help="Force a page version number (default: next free version)")
-    p.add_argument("--no-tool", action="store_true",
-                   help="Skip rendering the HTML capture tool")
+    p.add_argument(
+        "--grounded",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Ground detection on the transcript tokens (one box per word)",
+    )
+    p.add_argument(
+        "--limit", type=int, default=None, help="Keep only the first N detected words per page"
+    )
+    p.add_argument(
+        "--version",
+        type=int,
+        default=None,
+        help="Force a page version number (default: next free version)",
+    )
+    p.add_argument("--no-tool", action="store_true", help="Skip rendering the HTML capture tool")
     return p.parse_args(argv)
 
 
@@ -65,7 +81,7 @@ def main(argv=None):
             f"(PDF has {total_pages} pages)"
         )
 
-    model = build_model(args.model)                       # JSON detection
+    model = build_model(args.model)  # JSON detection
     text_model = build_model(args.model, json_output=False)  # plain-text transcription
     print(f"Processing pages {start_index + 1}..{end_index} with {model.model_name}")
     print(f"Output -> {paths.run_dir(args.pdf, root)}/")
@@ -75,7 +91,11 @@ def main(argv=None):
         page_num = i + 1
         print(f"\n--- Page {page_num} ---")
         page_image = images[i]
-        version = args.version if args.version is not None else paths.next_version(args.pdf, page_num, root)
+        version = (
+            args.version
+            if args.version is not None
+            else paths.next_version(args.pdf, page_num, root)
+        )
         try:
             # 1. Full-page transcription (for the QA cross-check) + counts
             transcript = transcribe_page(text_model, page_image)
@@ -93,22 +113,28 @@ def main(argv=None):
             if args.grounded:
                 grounded = None
                 try:
-                    model, grounded = extract_with_fallback(model, page_image, transcript=transcript)
-                except Exception as e:  # noqa: BLE001 - don't skip the page on a grounded failure
+                    model, grounded = extract_with_fallback(
+                        model, page_image, transcript=transcript
+                    )
+                except Exception as e:
                     print(f"Grounded detection failed ({str(e)[:60]}); using free detection.")
                 if grounded is not None and len(grounded) >= 0.5 * len(tokens):
                     word_data, n_infilled = reconcile.reconcile_indexed(grounded, tokens)
-                    print(f"Grounded located {len(grounded)}/{len(tokens)} tokens by index "
-                          f"-> {len(word_data)} boxes ({n_infilled} infilled).")
+                    print(
+                        f"Grounded located {len(grounded)}/{len(tokens)} tokens by index "
+                        f"-> {len(word_data)} boxes ({n_infilled} infilled)."
+                    )
                 else:
                     if grounded is not None:
-                        print(f"Grounded too sparse ({len(grounded)}/{len(tokens)}); free detection.")
+                        print(
+                            f"Grounded too sparse ({len(grounded)}/{len(tokens)}); free detection."
+                        )
                     model, word_data = extract_with_fallback(model, page_image)
             else:
                 model, word_data = extract_with_fallback(model, page_image)
             print(f"Page {page_num}: found {len(word_data)} boxes.")
             if args.limit is not None:
-                word_data = word_data[:args.limit]
+                word_data = word_data[: args.limit]
                 print(f"Keeping first {len(word_data)} (--limit {args.limit}).")
 
             master_word_list.extend(item.get("text", "") for item in word_data)
@@ -121,7 +147,7 @@ def main(argv=None):
             visual_path = paths.boxes_overlay(args.pdf, page_num, version, root)
             draw_boxes_on_image(page_image.copy(), word_data).save(visual_path)
             print(f"Saved overlay: {visual_path}")
-        except Exception as e:  # noqa: BLE001 - keep going on per-page failures
+        except Exception as e:
             print(f"Error on page {page_num}: {e}")
             traceback.print_exc()
 

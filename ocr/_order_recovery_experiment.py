@@ -13,16 +13,17 @@ Run: python -m ocr._order_recovery_experiment
 
 import json
 import zipfile
+
 import numpy as np
 from PIL import Image, ImageDraw
 
 from ocr.vectorize import vectorize_pil_crop
 
-H = 160            # render height (px)
-PEN = 3            # pen width (px)
+H = 160  # render height (px)
+PEN = 3  # pen width (px)
 PAD = 12
 N_WORDS = 40
-SAVE_SAMPLES = [0, 5, 12, 25]   # indices to save side-by-side images
+SAVE_SAMPLES = [0, 5, 12, 25]  # indices to save side-by-side images
 
 
 def load_words(name="easybank", n=N_WORDS):
@@ -33,7 +34,9 @@ def load_words(name="easybank", n=N_WORDS):
     for it in data[:: max(1, len(data) // (n * 2))]:
         pts = np.array(it["points"], dtype=float)
         if len(pts) > 30:
-            out.append((it["metadata"].get("asciiSequence", ""), pts, it["metadata"].get("aspectRatio", 1)))
+            out.append(
+                (it["metadata"].get("asciiSequence", ""), pts, it["metadata"].get("aspectRatio", 1))
+            )
         if len(out) >= n:
             break
     return out
@@ -56,7 +59,7 @@ def render(px, pen_flags, W, width=PEN):
     img = Image.new("L", (W, H), 255)
     d = ImageDraw.Draw(img)
     for i in range(len(px) - 1):
-        if pen_flags[i] == 1:                      # pen down at i -> draw to i+1
+        if pen_flags[i] == 1:  # pen down at i -> draw to i+1
             d.line([tuple(px[i]), tuple(px[i + 1])], fill=0, width=width)
     return img
 
@@ -98,7 +101,9 @@ def run(name, save_prefix=None, save_idx=()):
         true_img = render(px, true_pen, W)
 
         # recover via the OCR vectorizer
-        rec = np.array(vectorize_pil_crop(true_img.convert("RGB")), dtype=float)  # [nx,ny,state] in [0,1]
+        rec = np.array(
+            vectorize_pil_crop(true_img.convert("RGB")), dtype=float
+        )  # [nx,ny,state] in [0,1]
         if len(rec) < 5:
             continue
         rec_px = rec[:, :2] * [W, H]
@@ -109,24 +114,33 @@ def run(name, save_prefix=None, save_idx=()):
         true_ups = int((true_pen == 0).sum())
         rec_ups = int((rec_pen == 0).sum())
         tl, rl = path_len(px, true_pen), path_len(rec_px, rec_pen)
-        rows.append(dict(
-            word=word,
-            iou=iou(m_true, m_rec),
-            true_ups=true_ups, rec_ups=rec_ups,
-            len_ratio=(rl / tl) if tl else 0,
-            true_rev=x_reversals(px, true_pen), rec_rev=x_reversals(rec_px, rec_pen),
-            npts_true=len(px), npts_rec=len(rec),
-        ))
+        rows.append(
+            {
+                "word": word,
+                "iou": iou(m_true, m_rec),
+                "true_ups": true_ups,
+                "rec_ups": rec_ups,
+                "len_ratio": (rl / tl) if tl else 0,
+                "true_rev": x_reversals(px, true_pen),
+                "rec_rev": x_reversals(rec_px, rec_pen),
+                "npts_true": len(px),
+                "npts_rec": len(rec),
+            }
+        )
         if save_prefix is not None and k in save_idx:
             combo = Image.new("L", (W, 2 * H + 4), 200)
             combo.paste(true_img, (0, 0))
             combo.paste(rec_img, (0, H + 4))
             combo.save(f"/tmp/{save_prefix}_{k:02d}_{word[:10]}.png")
 
-    a = lambda key: np.mean([r[key] for r in rows])
+    def a(key):
+        return np.mean([r[key] for r in rows])
+
     print(f"  visual IoU:        {a('iou'):.3f}   (1.0 = perfect overlap; held = good)")
-    print(f"  pen-ups true->rec: {a('true_ups'):.1f} -> {a('rec_ups'):.1f}   "
-          f"(x{a('rec_ups')/max(a('true_ups'),1e-6):.1f} fabricated; target ~1x)")
+    print(
+        f"  pen-ups true->rec: {a('true_ups'):.1f} -> {a('rec_ups'):.1f}   "
+        f"(x{a('rec_ups') / max(a('true_ups'), 1e-6):.1f} fabricated; target ~1x)"
+    )
     print(f"  path-length ratio: {a('len_ratio'):.2f}   (>1 = retracing detours)")
     print(f"  x-reversals:       {a('true_rev'):.1f} -> {a('rec_rev'):.1f}")
     return rows
@@ -148,7 +162,9 @@ def diacritic_check(rows):
     print(f"    avg pen-ups true->rec: {tu:.1f} -> {ru:.1f}")
     print(f"    recovered pen-ups EXACT match: {exact}/{len(dia)}   within 1: {close}/{len(dia)}")
     for r in sorted(dia, key=lambda r: -abs(r["rec_ups"] - r["true_ups"]))[:8]:
-        print(f"      {r['word'][:16]:16} true={r['true_ups']} rec={r['rec_ups']} iou={r['iou']:.2f}")
+        print(
+            f"      {r['word'][:16]:16} true={r['true_ups']} rec={r['rec_ups']} iou={r['iou']:.2f}"
+        )
 
 
 if __name__ == "__main__":
@@ -159,7 +175,9 @@ if __name__ == "__main__":
     print("  --- diacritic recovery ---")
     diacritic_check(big)
     # save a few i/j/t/x sample images for visual inspection
-    import json as _json, zipfile as _zip
+    import json as _json
+    import zipfile as _zip
+
     with _zip.ZipFile("data/bigbank.json.zip") as z:
         _d = _json.load(z.open(z.namelist()[0]))
     shown = 0
@@ -174,7 +192,8 @@ if __name__ == "__main__":
         rec = np.array(vectorize_pil_crop(true_img.convert("RGB")), float)
         rec_img = render(rec[:, :2] * [W, H], rec[:, 2], W)
         combo = Image.new("L", (W, 2 * H + 4), 200)
-        combo.paste(true_img, (0, 0)); combo.paste(rec_img, (0, H + 4))
+        combo.paste(true_img, (0, 0))
+        combo.paste(rec_img, (0, H + 4))
         combo.save(f"/tmp/bigbank_diac_{shown}_{w[:10]}.png")
         shown += 1
     print(f"  saved {shown} i/t diacritic samples to /tmp/bigbank_diac_*.png")

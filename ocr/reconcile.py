@@ -14,13 +14,13 @@ def _estimate(prev, nxt, k, span):
     if prev and nxt:
         f = (k / span) if span else 0.5
         return [int(prev[i] + (nxt[i] - prev[i]) * f) for i in range(4)]
-    if prev:                                   # trailing gap: place to the right
+    if prev:  # trailing gap: place to the right
         w = max(20, prev[3] - prev[1])
         return [prev[0], min(1000, prev[3]), prev[2], min(1000, prev[3] + w)]
-    if nxt:                                    # leading gap: place to the left
+    if nxt:  # leading gap: place to the left
         w = max(20, nxt[3] - nxt[1])
         return [nxt[0], max(0, nxt[1] - w), nxt[2], max(0, nxt[1])]
-    return [450, 450, 550, 550]                # whole page empty: center-ish
+    return [450, 450, 550, 550]  # whole page empty: center-ish
 
 
 def _infill(result):
@@ -52,7 +52,8 @@ def reconcile_indexed(index_map, tokens):
     result = []
     for i, tok in enumerate(tokens):
         box = index_map.get(i + 1)
-        result.append({"text": tok,
-                       "box_2d": [int(v) for v in box[:4]] if box and len(box) >= 4 else None})
+        result.append(
+            {"text": tok, "box_2d": [int(v) for v in box[:4]] if box and len(box) >= 4 else None}
+        )
     n_infilled = _infill(result)
     return result, n_infilled

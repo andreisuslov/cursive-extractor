@@ -8,18 +8,27 @@ centerline, (b) how it segments, (c) where strokes begin.
 Run: python -m ocr._overlay_inspect   -> writes /tmp/overlay_*.png
 """
 
+import glob
 import json
 import zipfile
-import glob
-import numpy as np
+
 import cv2
+import numpy as np
 from PIL import Image, ImageDraw
 
 from ocr.vectorize import preprocess, trace_ink
 
 # distinct, saturated BGR colours cycled per stroke
-PALETTE = [(0, 0, 230), (230, 90, 0), (0, 160, 0), (200, 0, 200),
-           (0, 150, 255), (255, 160, 0), (130, 0, 200), (0, 0, 0)]
+PALETTE = [
+    (0, 0, 230),
+    (230, 90, 0),
+    (0, 160, 0),
+    (200, 0, 200),
+    (0, 150, 255),
+    (255, 160, 0),
+    (130, 0, 200),
+    (0, 0, 0),
+]
 
 
 def fade(gray, keep=0.32):
@@ -32,7 +41,7 @@ def draw_overlay(gray, strokes, lw=2):
     img = fade(gray)
     for si, s in enumerate(strokes):
         col = PALETTE[si % len(PALETTE)]
-        pts = [(int(round(x)), int(round(y))) for (x, y) in s]
+        pts = [(round(x), round(y)) for (x, y) in s]
         for i in range(len(pts) - 1):
             cv2.line(img, pts[i], pts[i + 1], col, lw, cv2.LINE_AA)
         if pts:
@@ -111,7 +120,8 @@ def main():
         strokes = trace_ink(preprocess(gray))
         folder = cp.rsplit("/", 2)[1]
         try:
-            word = open(cp.replace("box.jpg", "text_recognized.txt")).read().strip()
+            with open(cp.replace("box.jpg", "text_recognized.txt")) as f:
+                word = f.read().strip()
         except Exception:
             word = folder
         out = f"/tmp/overlay_real_{folder.split('_box_')[-1]}_{word[:8]}.png"

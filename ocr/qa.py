@@ -7,11 +7,11 @@ the independent transcription pass and the boxed words.
     python -m ocr.qa --pdf data/content/test_document.pdf --page 4
 """
 
+import argparse
+import collections
+import difflib
 import os
 import re
-import argparse
-import difflib
-import collections
 
 from . import config, paths
 
@@ -52,7 +52,7 @@ def run_qa(pdf_path, page, version=None, root=None, write=True):
     # More meaningful than exact order when a page has multiple columns/entries
     # that the transcription and detection passes traverse differently.
     tc, bc = collections.Counter(t_tokens), collections.Counter(b_tokens)
-    missing, extra = tc - bc, bc - tc          # transcript-only / boxes-only
+    missing, extra = tc - bc, bc - tc  # transcript-only / boxes-only
     complete = bool(t_tokens) and not missing and not extra
     matched = len(t_tokens) - sum(missing.values())
     pct = (100.0 * matched / len(t_tokens)) if t_tokens else 0.0
@@ -62,22 +62,28 @@ def run_qa(pdf_path, page, version=None, root=None, write=True):
         f"transcript words:  {len(t_tokens)}",
         f"box folders:       {len(b_tokens)}",
         f"exact-order match: {'PASS' if passed else 'FAIL'}",
-        f"completeness:      {'PASS' if complete else 'FAIL'}  ({matched}/{len(t_tokens)} = {pct:.1f}%, "
+        f"completeness:      {'PASS' if complete else 'FAIL'}  "
+        f"({matched}/{len(t_tokens)} = {pct:.1f}%, "
         f"{sum(missing.values())} missing, {sum(extra.values())} extra)",
     ]
     if not transcript:
         lines.append("(no transcript found — run ocr.extract_boxes first)")
     if missing:
-        lines.append("missing (in transcript, not boxed): " + ", ".join(
-            f"{w}x{n}" if n > 1 else w for w, n in list(missing.items())[:40]))
+        lines.append(
+            "missing (in transcript, not boxed): "
+            + ", ".join(f"{w}x{n}" if n > 1 else w for w, n in list(missing.items())[:40])
+        )
     if extra:
-        lines.append("extra (boxed, not in transcript):   " + ", ".join(
-            f"{w}x{n}" if n > 1 else w for w, n in list(extra.items())[:40]))
+        lines.append(
+            "extra (boxed, not in transcript):   "
+            + ", ".join(f"{w}x{n}" if n > 1 else w for w, n in list(extra.items())[:40])
+        )
     if not passed and t_tokens:
         lines.append("")
         lines.append("ordered diff (- transcript / + boxes):")
-        diff = difflib.unified_diff(t_tokens, b_tokens, fromfile="transcript",
-                                    tofile="boxes", lineterm="")
+        diff = difflib.unified_diff(
+            t_tokens, b_tokens, fromfile="transcript", tofile="boxes", lineterm=""
+        )
         lines.extend(list(diff)[:60])
     report = "\n".join(lines)
 
@@ -93,15 +99,19 @@ def parse_args(argv=None):
     p.add_argument("--pdf", default=config.PDF_PATH, help="Source PDF")
     p.add_argument("--page", type=int, default=2, help="Page number, 1-based")
     p.add_argument("--output-root", default=paths.OUTPUT_ROOT, help="Root output folder")
-    p.add_argument("--version", type=int, default=None,
-                   help="Page version (default: latest existing)")
+    p.add_argument(
+        "--version", type=int, default=None, help="Page version (default: latest existing)"
+    )
     return p.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
-    version = args.version if args.version is not None else paths.latest_version(
-        args.pdf, args.page, args.output_root)
+    version = (
+        args.version
+        if args.version is not None
+        else paths.latest_version(args.pdf, args.page, args.output_root)
+    )
     if version is None:
         raise SystemExit("No processed version found; run ocr.extract_boxes first.")
     passed, report = run_qa(args.pdf, args.page, version, args.output_root)

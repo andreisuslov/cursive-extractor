@@ -1,0 +1,10 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# cursive_ocr_extraction.py: Colab export with `!pip`/`!apt-get` magics -- invalid
+# Python by design (refactored into the ocr/ package). Notebooks are exploratory and
+# reference cross-cell runtime state (false-positive F821), so lint .py only.
+extend-exclude = ["cursive_ocr_extraction.py", "*.ipynb"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]

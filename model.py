@@ -2,60 +2,66 @@
 
 ########## IMPORTS AND A FEW GLOBAL VARIABLES ##########
 
-import math, os, sys, argparse, getpass
+import argparse
+import getpass
+import math
+import os
+import sys
 from types import SimpleNamespace
 
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
-
 import wandb
-
+from torch.nn import functional as F
 
 ########## ALL ARGUMENTS ##########
 
+
 def get_all_args(use_argparse=True):
     args_config = {
-        'max_steps': (110000, int, 'How many steps to train for'),
-        'print_every': (100, int, 'Print log info after how many steps'),
-        'log_every': (2500, int, 'Sample model after how many steps'),
-        'lr_decay': (0.333, float, 'How much to decay the learning rate'),
-        'step_lr_every': (33000, int, 'How often to decay the learning rate'),
-        'device': ('cuda', str, 'This is meant to be trained on a GPU'),
-        'seed': (42, int, 'Random seed for reproducibility'),
-        'n_layer': (4, int, 'Number of Transformer layers'),
-        'n_embd': (64, int, 'Number of embedding dimensions in self attention'),
-        'n_embd_context': (64, int, 'Number of embedding dimensions in cross attention'),
-        'n_ctx_head': (4, int, 'Number of attention heads in Transformer block'),
-        'learning_rate': (1e-2, float, 'Learning rate'),
-        'weight_decay': (1e-4, float, 'Weight decay'),
-        'batch_size': (32, int, 'Batch size'),
-        'train_size': (497000, int, 'Number of train examples'),
-        'test_size': (3000, int, 'Number of test examples'),
-        'num_words': (5, int, 'Number of words'),
-        'max_seq_length': (1500, int, 'Maximum sequence length (tokens)'),
-        'augment': (True, 'store_true', 'Perform augmentations'),
-        'downsample_mean': (0.65, float, 'Mean amount to downsample stroke points (0.65=65%)'),
-        'downsample_width': (0.1, float, 'Width of the uniform distribution (0.1=10%)'),
-        'add_digits': (True, 'store_true', 'Add digit words to the word bank'),
-        'alphabet': (" enaitoshrdx.vpukbgfcymzw1lqj804I92637OTAS5N)EHR\"\'(BCQLMWYU,ZF!DXV?KPGJ", str, 
-                        'All the characters that this model will be able to draw'),
-        'dataset_name': ('bigeasybank', str, 'The name of the .zip file containing your dataset'),
-        'wandb_project': ('bigbank_experiments', str, 'W&B project name'),
-        'wandb_entity': ('sam-greydanus', str, 'Set this to your wandb username or team name'),
-        'wandb_run_name': ('unnamed_run', str, 'W&B run name'),
-        'wandb_api_key': (None, str, 'Weights & Biases API Key'),
-        'load_from_run_id': (None, str, 'Load from a specific W&B run ID'),
-        'local_checkpoint_path': ('best_checkpoint.pt', str, 'Path to local model file'),
+        "max_steps": (110000, int, "How many steps to train for"),
+        "print_every": (100, int, "Print log info after how many steps"),
+        "log_every": (2500, int, "Sample model after how many steps"),
+        "lr_decay": (0.333, float, "How much to decay the learning rate"),
+        "step_lr_every": (33000, int, "How often to decay the learning rate"),
+        "device": ("cuda", str, "This is meant to be trained on a GPU"),
+        "seed": (42, int, "Random seed for reproducibility"),
+        "n_layer": (4, int, "Number of Transformer layers"),
+        "n_embd": (64, int, "Number of embedding dimensions in self attention"),
+        "n_embd_context": (64, int, "Number of embedding dimensions in cross attention"),
+        "n_ctx_head": (4, int, "Number of attention heads in Transformer block"),
+        "learning_rate": (1e-2, float, "Learning rate"),
+        "weight_decay": (1e-4, float, "Weight decay"),
+        "batch_size": (32, int, "Batch size"),
+        "train_size": (497000, int, "Number of train examples"),
+        "test_size": (3000, int, "Number of test examples"),
+        "num_words": (5, int, "Number of words"),
+        "max_seq_length": (1500, int, "Maximum sequence length (tokens)"),
+        "augment": (True, "store_true", "Perform augmentations"),
+        "downsample_mean": (0.65, float, "Mean amount to downsample stroke points (0.65=65%)"),
+        "downsample_width": (0.1, float, "Width of the uniform distribution (0.1=10%)"),
+        "add_digits": (True, "store_true", "Add digit words to the word bank"),
+        "alphabet": (
+            " enaitoshrdx.vpukbgfcymzw1lqj804I92637OTAS5N)EHR\"'(BCQLMWYU,ZF!DXV?KPGJ",
+            str,
+            "All the characters that this model will be able to draw",
+        ),
+        "dataset_name": ("bigeasybank", str, "The name of the .zip file containing your dataset"),
+        "wandb_project": ("bigbank_experiments", str, "W&B project name"),
+        "wandb_entity": ("sam-greydanus", str, "Set this to your wandb username or team name"),
+        "wandb_run_name": ("unnamed_run", str, "W&B run name"),
+        "wandb_api_key": (None, str, "Weights & Biases API Key"),
+        "load_from_run_id": (None, str, "Load from a specific W&B run ID"),
+        "local_checkpoint_path": ("best_checkpoint.pt", str, "Path to local model file"),
     }
 
     if use_argparse:
-        parser = argparse.ArgumentParser(description='Train a cursivetransformer model')
+        parser = argparse.ArgumentParser(description="Train a cursivetransformer model")
         for arg, (default, arg_type, help_text) in args_config.items():
-            if arg_type == 'store_true':
-                parser.add_argument(f'--{arg}', action=arg_type, default=default, help=help_text)
+            if arg_type == "store_true":
+                parser.add_argument(f"--{arg}", action=arg_type, default=default, help=help_text)
             else:
-                parser.add_argument(f'--{arg}', type=arg_type, default=default, help=help_text)
+                parser.add_argument(f"--{arg}", type=arg_type, default=default, help=help_text)
         args = parser.parse_args()
     else:
         args = SimpleNamespace(**{k: v[0] for k, v in args_config.items()})
@@ -67,8 +73,8 @@ def get_all_args(use_argparse=True):
     return args
 
 
-
 ########## MODEL I/O ##########
+
 
 def get_checkpoint(args, sample_only):
     model = Transformer(args)
@@ -76,8 +82,16 @@ def get_checkpoint(args, sample_only):
     print(f"Model #params: {sum(p.numel() for p in model.parameters())}")
 
     if not sample_only:
-        optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, betas=(0.9, 0.99), eps=1e-8)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_lr_every, gamma=args.lr_decay)
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=args.learning_rate,
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.99),
+            eps=1e-8,
+        )
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=args.step_lr_every, gamma=args.lr_decay
+        )
     else:
         optimizer = None
         scheduler = None
@@ -88,32 +102,35 @@ def get_checkpoint(args, sample_only):
     if args.load_from_run_id or sample_only:
         if os.path.exists(args.local_checkpoint_path):
             checkpoint = torch.load(args.local_checkpoint_path, weights_only=True)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            model.load_state_dict(checkpoint["model_state_dict"])
             print(f"Loaded model from local path: {args.local_checkpoint_path}")
             if not sample_only:
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-                step = checkpoint['step']
-                best_loss = checkpoint['best_loss']
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                step = checkpoint["step"]
+                best_loss = checkpoint["best_loss"]
         elif args.load_from_run_id:
             artifact = get_latest_checkpoint_artifact(args)
             artifact_dir = artifact.download()
-            checkpoint = torch.load(os.path.join(artifact_dir, "best_checkpoint.pt"), weights_only=True)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            
+            checkpoint = torch.load(
+                os.path.join(artifact_dir, "best_checkpoint.pt"), weights_only=True
+            )
+            model.load_state_dict(checkpoint["model_state_dict"])
+
             if not sample_only:
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-                step = checkpoint['step'] + 1
-                best_loss = checkpoint['best_loss']
-            
-            save_checkpoint(model, args.local_checkpoint_path, optimizer, scheduler, step, best_loss)
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                step = checkpoint["step"] + 1
+                best_loss = checkpoint["best_loss"]
+
+            save_checkpoint(
+                model, args.local_checkpoint_path, optimizer, scheduler, step, best_loss
+            )
         else:
             print("No local model or W&B run ID provided. Exiting.")
             sys.exit()
 
     return model, optimizer, scheduler, step, best_loss
-
 
 
 def get_latest_checkpoint_artifact(args, verbose=True):
@@ -122,11 +139,14 @@ def get_latest_checkpoint_artifact(args, verbose=True):
     if verbose:
         print(f"Finding latest checkpoint for W&B run id {args.load_from_run_id}")
     latest_artifact = None
-    get_version = lambda artifact: -1 if artifact is None else int(artifact.name.split(':v')[-1])
+
+    def get_version(artifact):
+        return -1 if artifact is None else int(artifact.name.split(":v")[-1])
+
     for artifact in run.logged_artifacts():
         if verbose:
             print(f"  {artifact.type}:{artifact.name}")
-        if artifact.type == 'model' and (get_version(artifact) > get_version(latest_artifact)):
+        if artifact.type == "model" and (get_version(artifact) > get_version(latest_artifact)):
             latest_artifact = artifact
     if verbose:
         print(f"Selected:  {latest_artifact.type}:{latest_artifact.name}")
@@ -134,15 +154,15 @@ def get_latest_checkpoint_artifact(args, verbose=True):
 
 
 def save_checkpoint(model, path, optimizer=None, scheduler=None, step=None, best_loss=None):
-    checkpoint = {'model_state_dict': model.state_dict()}
+    checkpoint = {"model_state_dict": model.state_dict()}
     if optimizer is not None:
-        checkpoint['optimizer_state_dict'] = optimizer.state_dict()
+        checkpoint["optimizer_state_dict"] = optimizer.state_dict()
     if scheduler is not None:
-        checkpoint['scheduler_state_dict'] = scheduler.state_dict()
+        checkpoint["scheduler_state_dict"] = scheduler.state_dict()
     if step is not None:
-        checkpoint['step'] = step
+        checkpoint["step"] = step
     if best_loss is not None:
-        checkpoint['best_loss'] = best_loss
+        checkpoint["best_loss"] = best_loss
     torch.save(checkpoint, path)
 
 
@@ -151,11 +171,17 @@ def save_checkpoint(model, path, optimizer=None, scheduler=None, step=None, best
 
 class NewGELU(nn.Module):
     """
-    Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT).
+    Implementation of the GELU activation function from Google BERT (identical to OpenAI GPT).
     Reference: Gaussian Error Linear Units (GELU) paper: https://arxiv.org/abs/1606.08415
     """
+
     def forward(self, x):
-        return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
+        return (
+            0.5
+            * x
+            * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
+        )
+
 
 class CausalSelfAttention(nn.Module):
     """
@@ -172,30 +198,37 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
         # causal mask to ensure that attention is only applied to the left in the input sequence
-        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                     .view(1, 1, config.block_size, config.block_size))
+        self.register_buffer(
+            "bias",
+            torch.tril(torch.ones(config.block_size, config.block_size)).view(
+                1, 1, config.block_size, config.block_size
+            ),
+        )
         self.n_head = config.n_ctx_head
         self.n_embd = config.n_embd
 
     def forward(self, x):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k ,v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # calc query, key, values for all heads in batch; move head forward to batch dim
+        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
         att = F.softmax(att, dim=-1)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = (
+            y.transpose(1, 2).contiguous().view(B, T, C)
+        )  # re-assemble all head outputs side by side
 
         # output projection
         y = self.c_proj(y)
         return y
+
 
 class CrossAttention(nn.Module):
     def __init__(self, config):
@@ -211,29 +244,38 @@ class CrossAttention(nn.Module):
         self.n_embd_context = config.n_embd_context
 
     def forward(self, x, context):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd_context)
+        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd_context)
         _, T_ctx, _ = context.size()
 
         # calculate query for all heads in batch and move head forward to be the batch dim
-        q = self.c_attn_q(x).view(B, T, self.n_ctx_head, C // self.n_ctx_head).transpose(1, 2) # (B, nh, T, hs)
+        q = (
+            self.c_attn_q(x).view(B, T, self.n_ctx_head, C // self.n_ctx_head).transpose(1, 2)
+        )  # (B, nh, T, hs)
 
         # calculate key, values for all heads in batch and move head forward to be the batch dim
         k, v = self.c_attn_kv(context).split(self.n_embd_context, dim=2)
-        k = k.view(B, T_ctx, self.n_ctx_head, C // self.n_ctx_head).transpose(1, 2) # (B, nh, T_ctx, hs)
-        v = v.view(B, T_ctx, self.n_ctx_head, C // self.n_ctx_head).transpose(1, 2) # (B, nh, T_ctx, hs)
+        k = k.view(B, T_ctx, self.n_ctx_head, C // self.n_ctx_head).transpose(
+            1, 2
+        )  # (B, nh, T_ctx, hs)
+        v = v.view(B, T_ctx, self.n_ctx_head, C // self.n_ctx_head).transpose(
+            1, 2
+        )  # (B, nh, T_ctx, hs)
 
         # cross-attention; (B, nh, T, hs) x (B, nh, hs, T_ctx) -> (B, nh, T, T_ctx)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = F.softmax(att, dim=-1)
-        y = att @ v # (B, nh, T, T_ctx) x (B, nh, T_ctx, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        y = att @ v  # (B, nh, T, T_ctx) x (B, nh, T_ctx, hs) -> (B, nh, T, hs)
+        y = (
+            y.transpose(1, 2).contiguous().view(B, T, C)
+        )  # re-assemble all head outputs side by side
 
         # output projection
         y = self.c_proj(y)
         return y
 
+
 class Block(nn.Module):
-    """ an unassuming Transformer block """
+    """an unassuming Transformer block"""
 
     def __init__(self, config, has_cross_attn=True):
         super().__init__()
@@ -244,65 +286,76 @@ class Block(nn.Module):
             self.ln_2 = nn.LayerNorm(config.n_embd_context)
             self.cross_attn = CrossAttention(config)
         self.ln_3 = nn.LayerNorm(config.n_embd)
-        self.mlp = nn.ModuleDict(dict(
-            c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd),
-            c_proj  = nn.Linear(4 * config.n_embd, config.n_embd),
-            act     = NewGELU(),
-        ))
+        self.mlp = nn.ModuleDict(
+            {
+                "c_fc": nn.Linear(config.n_embd, 4 * config.n_embd),
+                "c_proj": nn.Linear(4 * config.n_embd, config.n_embd),
+                "act": NewGELU(),
+            }
+        )
         m = self.mlp
-        self.mlpf = lambda x: m.c_proj(m.act(m.c_fc(x))) # MLP forward
+        self.mlpf = lambda x: m.c_proj(m.act(m.c_fc(x)))  # MLP forward
 
     def forward(self, x, context=None):
         x = x + self.attn(self.ln_1(x))
         if self.has_cross_attn:
-            assert context is not None, 'Expected context'
+            assert context is not None, "Expected context"
             x = x + self.cross_attn(self.ln_2(x), context)
         x = x + self.mlpf(self.ln_3(x))
         return x
 
+
 class Transformer(nn.Module):
-    """ Transformer Language Model, exactly as seen in GPT-2 """
+    """Transformer Language Model, exactly as seen in GPT-2"""
 
     def __init__(self, config):
         super().__init__()
         self.block_size = config.block_size
         self.config = config
 
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
-            wce = nn.Embedding(config.context_vocab_size, config.n_embd_context),
-            wcpe = nn.Embedding(config.context_block_size, config.n_embd),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = nn.LayerNorm(config.n_embd),
-        ))
+        self.transformer = nn.ModuleDict(
+            {
+                "wte": nn.Embedding(config.vocab_size, config.n_embd),
+                "wpe": nn.Embedding(config.block_size, config.n_embd),
+                "wce": nn.Embedding(config.context_vocab_size, config.n_embd_context),
+                "wcpe": nn.Embedding(config.context_block_size, config.n_embd),
+                "h": nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+                "ln_f": nn.LayerNorm(config.n_embd),
+            }
+        )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # report number of parameters (note we don't count the decoder parameters in lm_head)
         n_params = sum(p.numel() for p in self.transformer.parameters())
-        print("Number of Transformer parameters: {:.0f}".format(n_params,))
+        print(f"Number of Transformer parameters: {n_params:.0f}")
 
     def get_block_size(self):
         return self.block_size
 
     def forward(self, idx, context, targets=None):
         device = idx.device
-        b, t = idx.size()
-        assert t <= self.block_size, f"Cannot forward sequence of length {t}, block size is only {self.block_size}"
+        _b, t = idx.size()
+        assert t <= self.block_size, (
+            f"Cannot forward sequence of length {t}, block size is only {self.block_size}"
+        )
 
         # forward the GPT model itself
-        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
+        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0)  # shape (1, t)
+        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
+        pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (1, t, n_embd)
         x = tok_emb + pos_emb
 
         context_t = context.size(-1)
-        context_pos = torch.arange(0, context_t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
-        context_emb = self.transformer.wce(context) # context embeddings of shape (b, t_ctx, n_embd_context)
+        context_pos = torch.arange(0, context_t, dtype=torch.long, device=device).unsqueeze(
+            0
+        )  # shape (1, t)
+        context_emb = self.transformer.wce(
+            context
+        )  # context embeddings of shape (b, t_ctx, n_embd_context)
         context_pos_emb = self.transformer.wcpe(context_pos)
         c = context_emb + context_pos_emb
 
-        for i, block in enumerate(self.transformer.h):
+        for _i, block in enumerate(self.transformer.h):
             x = block(x, c)
 
         x = self.transformer.ln_f(x)
@@ -311,5 +364,7 @@ class Transformer(nn.Module):
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
+            )
         return logits, loss
