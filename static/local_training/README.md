@@ -82,3 +82,29 @@ usually the roughest.
 
 Regenerate (checkpoint + fresh PNGs land in the gitignored `runs/`):
 `python3 scripts/train_local.py --dataset easybank --steps 12000 --max_seq_length 512 --batch_size 16 --step_lr_every 3000 --lr_decay 0.5 --num_samples 5 --max_new_tokens 650`
+
+## wide-augmentation variety (`bigbank_varied_*.png`)
+
+A full bigbank run **with the wide handwriting augmentation** (both-way slant, line
+incline, 0.6-1.6x height, 0.8-1.3x width, per-word vertical jitter -- see
+`data.augment_stroke`):
+
+```
+python scripts/train_local.py --dataset bigbank --num_words 2 --max_seq_length 512 \
+  --batch_size 16 --step_lr_every 2500 --lr_decay 0.5 --steps 12000
+```
+
+- device MPS, 12000 steps, **~19 min** (97 ms/step), truncation ~23%
+- train loss 6.46 -> 1.76, best test loss **2.00**
+
+`bigbank_varied_01_grid.png` renders the same word six times each; `02`/`03` are
+per-word strips for "writing" / "summer". Across the samples the **style visibly
+varies** -- slant (left / upright / right), height (tall vs short), and width
+(condensed vs spread) -- which the earlier fixed-style runs never showed.
+
+Honest trade-off: best test loss **2.00 is higher than the no-augmentation bigbank run
+(1.39)** -- a small model trained for ~20 min cannot fit the much wider variety as
+tightly, so individual letters are rougher and some warmups generate degenerate output
+(filtered out of these strips). The augmentation is clearly *learnable and does not break
+training*; a rigorous with-vs-without legibility comparison at a larger step budget is
+future work.
