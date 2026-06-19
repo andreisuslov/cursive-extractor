@@ -58,9 +58,11 @@ def to_canvas(pts, aspect):
 def render(px, pen_flags, W, width=PEN):
     img = Image.new("L", (W, H), 255)
     d = ImageDraw.Draw(img)
-    for i in range(len(px) - 1):
-        if pen_flags[i] == 1:  # pen down at i -> draw to i+1
-            d.line([tuple(px[i]), tuple(px[i + 1])], fill=0, width=width)
+    pts = [tuple(p) for p in px.tolist()]  # Python-float coords (same values as px)
+    flags = pen_flags.tolist()
+    for i in range(len(pts) - 1):
+        if flags[i] == 1:  # pen down at i -> draw to i+1
+            d.line((pts[i], pts[i + 1]), fill=0, width=width)
     return img
 
 
@@ -75,20 +77,17 @@ def iou(a, b):
 
 
 def path_len(px, pen_flags):
-    s = 0.0
-    for i in range(len(px) - 1):
-        if pen_flags[i] == 1:
-            s += float(np.hypot(*(px[i + 1] - px[i])))
-    return s
+    """Total pen-down segment length. Per-segment lengths are computed in one numpy
+    call; summing the in-order list reproduces the original sequential float sum."""
+    deltas = px[1:] - px[:-1]
+    seg = np.hypot(deltas[:, 0], deltas[:, 1])
+    return float(sum(seg[pen_flags[:-1] == 1].tolist()))
 
 
 def x_reversals(px, pen_flags, thresh=3.0):
     """Count backtracks (x decreasing) within pen-down runs -- a sign of bad order."""
-    n = 0
-    for i in range(len(px) - 1):
-        if pen_flags[i] == 1 and (px[i, 0] - px[i + 1, 0]) > thresh:
-            n += 1
-    return n
+    dx = px[:-1, 0] - px[1:, 0]
+    return int(((pen_flags[:-1] == 1) & (dx > thresh)).sum())
 
 
 def run(name, save_prefix=None, save_idx=()):
