@@ -20,16 +20,16 @@ Two CLI modes:
                 python -m ocr.vectorize --image data/content/temp_crop.jpg --save overlay.jpg
 """
 
-import os
-import json
 import argparse
+import itertools
+import json
 
 import cv2
 import numpy as np
 from PIL import Image, ImageEnhance
 
 from . import config, paths
-from .pdf_utils import load_page, crop_to_box, box_to_crop_box, fit_crop_to_ink
+from .pdf_utils import box_to_crop_box, crop_to_box, load_page
 
 
 def preprocess(gray):
@@ -47,6 +47,7 @@ def preprocess(gray):
 # Zhang-Suen skeleton per component, and a depth-first trace that retraces over
 # drawn edges at dead-ends -> one lift-free stroke per component.
 
+
 def zhang_suen(binary):
     """Zhang-Suen thinning -> clean 1-px skeleton (uint8 0/1). ``binary``: ink>0."""
     img = (binary > 0).astype(np.uint8)
@@ -61,8 +62,8 @@ def zhang_suen(binary):
             seq = [P2, P3, P4, P5, P6, P7, P8, P9]
             B = sum(seq)
             A = np.zeros_like(img)
-            ring = seq + [P2]
-            for a, b in zip(ring[:-1], ring[1:]):
+            ring = [*seq, P2]
+            for a, b in itertools.pairwise(ring):
                 A += ((a == 0) & (b == 1)).astype(np.uint8)
             cond = (img == 1) & (B >= 2) & (B <= 6) & (A == 1)
             if step == 0:
@@ -84,8 +85,9 @@ def _unit(dx, dy):
 
 
 def _nbrs_deg(pts):
-    nbrs = {(x, y): [(x + dx, y + dy) for dx, dy in _OFFS if (x + dx, y + dy) in pts]
-            for (x, y) in pts}
+    nbrs = {
+        (x, y): [(x + dx, y + dy) for dx, dy in _OFFS if (x + dx, y + dy) in pts] for (x, y) in pts
+    }
     return nbrs, {p: len(n) for p, n in nbrs.items()}
 
 
@@ -95,7 +97,7 @@ def prune_spurs(skel, max_spur=6, iters=3):
     skel = skel.copy()
     for _ in range(iters):
         ys, xs = np.nonzero(skel)
-        pts = set(zip(xs.tolist(), ys.tolist()))
+        pts = set(zip(xs.tolist(), ys.tolist(), strict=False))
         if not pts:
             break
         nbrs, deg = _nbrs_deg(pts)
@@ -112,7 +114,7 @@ def prune_spurs(skel, max_spur=6, iters=3):
                 remove.update(path[:-1])  # drop spur, keep the junction pixel
         if not remove:
             break
-        for (x, y) in remove:
+        for x, y in remove:
             skel[y, x] = 0
     return skel
 
@@ -124,7 +126,7 @@ def trace_component(skel):
     overlap -- no spurious lines, no pen-ups) until an unvisited branch is reached.
     Returns ``[path]`` (one stroke) covering the whole component, or ``[]``."""
     ys, xs = np.nonzero(skel)
-    pts = set(zip(xs.tolist(), ys.tolist()))
+    pts = set(zip(xs.tolist(), ys.tolist(), strict=False))
     if not pts:
         return []
     nbrs, deg = _nbrs_deg(pts)
@@ -142,9 +144,11 @@ def trace_component(skel):
             if last == (0.0, 0.0):
                 nxt = min(cand, key=lambda p: (p[0], p[1]))
             else:
-                def cont(p):
+
+                def cont(p, cur=cur, last=last):
                     d = _unit(p[0] - cur[0], p[1] - cur[1])
                     return last[0] * d[0] + last[1] * d[1]
+
                 nxt = max(cand, key=cont)
             visited.add(nxt)
             stack.append(nxt)
@@ -153,7 +157,7 @@ def trace_component(skel):
         else:
             stack.pop()
             if stack:
-                path.append(stack[-1])        # retrace one edge backwards
+                path.append(stack[-1])  # retrace one edge backwards
                 last = _unit(stack[-1][0] - cur[0], stack[-1][1] - cur[1])
     return [path] if len(path) >= 2 else []
 
@@ -166,7 +170,7 @@ def trace_ink(binary, min_area=10):
     n, labels = cv2.connectedComponents((binary > 0).astype(np.uint8), connectivity=8)
     strokes = []
     for lbl in range(1, n):
-        comp = (labels == lbl)
+        comp = labels == lbl
         if int(comp.sum()) < min_area:
             continue  # speck noise
         skel = prune_spurs(zhang_suen(comp.astype(np.uint8)))
@@ -181,7 +185,7 @@ def format_strokes(strokes, crop_width, crop_height):
     for stroke in strokes:
         if len(stroke) < 2:
             continue
-        for (x, y) in stroke:
+        for x, y in stroke:
             nx = round(max(0.0, min(1.0, float(x) / crop_width)), 4)
             ny = round(max(0.0, min(1.0, float(y) / crop_height)), 4)
             out.append([nx, ny, 1])
@@ -191,26 +195,31 @@ def format_strokes(strokes, crop_width, crop_height):
 
 # --- Clean per-word crop: strip ruled lines / bands / neighbours -------------
 
+
 def remove_ruled_lines(binary, span_frac=0.8, max_thick=4):
     """Remove TRUE ruled lines: thin, near-full-width horizontal runs that touch
     both side edges of the crop. Word strokes (thick, undulating, not edge-to-edge
     in a padded crop) are preserved."""
-    h, w = binary.shape
+    _h, w = binary.shape
     klen = max(20, int(span_frac * w))
-    horiz = cv2.morphologyEx(binary, cv2.MORPH_OPEN,
-                             cv2.getStructuringElement(cv2.MORPH_RECT, (klen, 1)))
+    horiz = cv2.morphologyEx(
+        binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (klen, 1))
+    )
     n, labels, stats, _ = cv2.connectedComponentsWithStats((horiz > 0).astype(np.uint8), 8)
     line_mask = np.zeros_like(binary)
     for lbl in range(1, n):
-        x, y, bw, bh, _ = stats[lbl]
+        x, _y, bw, bh, _ = stats[lbl]
         if bh <= max_thick and bw >= span_frac * w and x <= 2 and x + bw >= w - 2:
             line_mask[labels == lbl] = 255
     if not line_mask.any():
         return binary
     line_mask = cv2.dilate(line_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 5)))
     cleaned = cv2.subtract(binary, cv2.bitwise_and(binary, line_mask))
-    return cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE,  # reclose strokes a line cut
-                            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+    return cv2.morphologyEx(
+        cleaned,
+        cv2.MORPH_CLOSE,  # reclose strokes a line cut
+        cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+    )
 
 
 def keep_target_components(binary, rect, min_area=14):
@@ -233,8 +242,7 @@ def keep_target_components(binary, rect, min_area=14):
     return out
 
 
-def clean_word(page_image, box_2d, padding=None, pad_frac=None,
-               tighten=True, margin=6):
+def clean_word(page_image, box_2d, padding=None, pad_frac=None, tighten=True, margin=6):
     """Crop a word, strip ruled lines / scan bands / neighbours, optionally tighten
     to the kept ink. Returns ``(clean_gray_PIL, clean_binary, crop_box)``.
 
@@ -250,7 +258,7 @@ def clean_word(page_image, box_2d, padding=None, pad_frac=None,
     # vertical band can actually cut INSIDE the crop (not clamp to its edge). Not
     # fit_crop_to_ink -- the ink-fit over-expands into neighbours on a dense page.
     cb = box_to_crop_box(box_2d, wpx, hpx, padding, max(pad_frac, 0.85))
-    left, top, right, bottom = cb
+    left, top, _right, _bottom = cb
 
     gray = np.array(page_image.crop(cb).convert("L"))
     binary = remove_ruled_lines(preprocess(gray))
@@ -263,7 +271,7 @@ def clean_word(page_image, box_2d, padding=None, pad_frac=None,
     # a descender merging into the next line, and removes other lines entirely.
     # Horizontal stays generous (scaled to max(bw,bh)) so a narrow/mis-shaped box
     # never truncates a wide word.
-    H_, W_ = binary.shape
+    H_, _ = binary.shape
     # Band reaches up ~0.45x for ascenders, down ~0.75x for descenders; tight
     # enough to exclude an adjacent line on densely-ruled paper.
     y0c, y1c = max(0, int(ry0 - 0.5 * bh)), min(H_, int(ry1 + 0.8 * bh))
@@ -320,12 +328,24 @@ def vectorize_image_file(input_path, overlay_path=None):
     return strokes
 
 
-def vectorize_boxes(pdf_path, boxes, page_index, dpi=600, padding=None,
-                    pad_frac=None, fit_ink=None, clean=None, limit=None):
+def vectorize_boxes(
+    pdf_path,
+    boxes,
+    page_index,
+    dpi=600,
+    padding=None,
+    pad_frac=None,
+    fit_ink=None,
+    clean=None,
+    limit=None,
+):
     """Add {points, metadata} to each box entry, in place. Returns ``boxes``.
 
     With ``clean`` (default ``config.CROP_CLEAN``) each word crop is cleaned
-    (ruled lines / scan bands / neighbour words removed) before tracing.
+    (ruled lines / scan bands / neighbour words removed) before tracing. A safety
+    gate compares against the uncleaned trace and falls back to it when cleaning
+    *increases* the stroke count (e.g. a bad detection box), so cleaning can never
+    regress a word. ``metadata["cleaned"]`` records which path was used.
     ``limit`` vectorizes only the first N entries (the rest are left untouched).
     """
     padding = config.CROP_PADDING if padding is None else padding
@@ -334,17 +354,27 @@ def vectorize_boxes(pdf_path, boxes, page_index, dpi=600, padding=None,
     clean = config.CROP_CLEAN if clean is None else clean
     page = load_page(pdf_path, page_index, dpi=dpi)
     processed = 0
-    for entry in (boxes if limit is None else boxes[:limit]):
+
+    def n_strokes(pts):
+        return sum(1 for p in pts if p[2] == 0)
+
+    for entry in boxes if limit is None else boxes[:limit]:
         if "box_2d" not in entry:
             continue
+        crop, _ = crop_to_box(page, entry["box_2d"], padding, pad_frac, fit_ink)
+        raw_points = vectorize_pil_crop(crop)
+        used_clean = False
         if clean:
             _, binary, _ = clean_word(page, entry["box_2d"], padding, pad_frac)
-            crop_height, crop_width = binary.shape
-            points = format_strokes(trace_ink(binary), crop_width, crop_height)
+            ch, cw = binary.shape
+            clean_points = format_strokes(trace_ink(binary), cw, ch)
+            # gate: keep cleaning only if it doesn't increase the stroke count
+            if n_strokes(clean_points) <= n_strokes(raw_points):
+                points, crop_width, crop_height, used_clean = clean_points, cw, ch, True
+            else:
+                points, crop_width, crop_height = raw_points, crop.size[0], crop.size[1]
         else:
-            crop, _ = crop_to_box(page, entry["box_2d"], padding, pad_frac, fit_ink)
-            points = vectorize_pil_crop(crop)
-            crop_width, crop_height = crop.size
+            points, crop_width, crop_height = raw_points, crop.size[0], crop.size[1]
         entry["points"] = points
         entry["metadata"] = {
             "author": "robot",
@@ -352,6 +382,7 @@ def vectorize_boxes(pdf_path, boxes, page_index, dpi=600, padding=None,
             "pointCount": len(points),
             "strokeCount": sum(1 for p in points if p[2] == 0),
             "aspectRatio": round(crop_width / crop_height, 4),
+            "cleaned": used_clean,
         }
         processed += 1
         if processed % 10 == 0:
@@ -368,20 +399,37 @@ def parse_args(argv=None):
     # batch mode
     p.add_argument("--pdf", default=config.PDF_PATH, help="Source PDF (batch mode)")
     p.add_argument("--page", type=int, default=2, help="Page number, 1-based (batch mode)")
-    p.add_argument("--boxes", default=None,
-                   help="Boxes JSON to vectorize (default: canonical boxes for --pdf/--page)")
-    p.add_argument("--output", default=None,
-                   help="Output strokes JSON (default: canonical strokes for --pdf/--page)")
+    p.add_argument(
+        "--boxes",
+        default=None,
+        help="Boxes JSON to vectorize (default: canonical boxes for --pdf/--page)",
+    )
+    p.add_argument(
+        "--output",
+        default=None,
+        help="Output strokes JSON (default: canonical strokes for --pdf/--page)",
+    )
     p.add_argument("--output-root", default=paths.OUTPUT_ROOT, help="Root output folder")
-    p.add_argument("--version", type=int, default=None,
-                   help="Page version to read/write (default: latest existing)")
+    p.add_argument(
+        "--version",
+        type=int,
+        default=None,
+        help="Page version to read/write (default: latest existing)",
+    )
     p.add_argument("--limit", type=int, default=None, help="Vectorize only the first N boxes")
     p.add_argument("--dpi", type=int, default=600, help="Render DPI for crops (batch mode)")
     p.add_argument("--padding", type=int, default=config.CROP_PADDING, help="Crop padding (px)")
-    p.add_argument("--pad-frac", type=float, default=config.CROP_PAD_FRAC,
-                   help="Extra crop padding as a fraction of box size")
-    p.add_argument("--no-fit-ink", action="store_true",
-                   help="Disable growing the box until no ink touches its borders")
+    p.add_argument(
+        "--pad-frac",
+        type=float,
+        default=config.CROP_PAD_FRAC,
+        help="Extra crop padding as a fraction of box size",
+    )
+    p.add_argument(
+        "--no-fit-ink",
+        action="store_true",
+        help="Disable growing the box until no ink touches its borders",
+    )
     return p.parse_args(argv)
 
 
@@ -396,17 +444,29 @@ def main(argv=None):
         return
 
     root = args.output_root
-    version = args.version if args.version is not None else paths.latest_version(args.pdf, args.page, root)
+    version = (
+        args.version
+        if args.version is not None
+        else paths.latest_version(args.pdf, args.page, root)
+    )
     if version is None and not args.boxes:
         raise SystemExit("No processed version found; run ocr.extract_boxes first or pass --boxes.")
 
     boxes_path = args.boxes or paths.boxes_json(args.pdf, args.page, version, root)
     with open(boxes_path) as f:
         boxes = json.load(f)
-    vectorize_boxes(args.pdf, boxes, args.page - 1, dpi=args.dpi, padding=args.padding,
-                    pad_frac=args.pad_frac, fit_ink=not args.no_fit_ink, limit=args.limit)
+    vectorize_boxes(
+        args.pdf,
+        boxes,
+        args.page - 1,
+        dpi=args.dpi,
+        padding=args.padding,
+        pad_frac=args.pad_frac,
+        fit_ink=not args.no_fit_ink,
+        limit=args.limit,
+    )
     if args.limit is not None:
-        boxes = boxes[:args.limit]
+        boxes = boxes[: args.limit]
     out = args.output or paths.strokes_json(args.pdf, args.page, version, root)
     paths.ensure_parent(out)
     with open(out, "w") as f:

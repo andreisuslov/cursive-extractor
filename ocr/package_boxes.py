@@ -13,14 +13,14 @@ PDF. Defaults to the latest version of the page.
     python -m ocr.package_boxes --pdf data/content/test_document.pdf --page 4
 """
 
-import os
-import json
 import argparse
+import json
+import os
 
 from PIL import ImageDraw
 
 from . import config, paths, qa
-from .pdf_utils import load_page, crop_to_box
+from .pdf_utils import crop_to_box, load_page
 
 # Teal strokes overlaid on the cursive, matching the verification colour.
 TEAL = (0, 170, 160)
@@ -34,18 +34,29 @@ def draw_vectorized(crop_image, points, color=TEAL, width=2):
     px = [(p[0] * w, p[1] * h, p[2]) for p in points]
     for i in range(1, len(px)):
         if px[i][2] == 1 and px[i - 1][2] == 1:  # both pen-down: connect
-            draw.line([(px[i - 1][0], px[i - 1][1]), (px[i][0], px[i][1])],
-                      fill=color, width=width)
+            draw.line([(px[i - 1][0], px[i - 1][1]), (px[i][0], px[i][1])], fill=color, width=width)
     return img
 
 
-def package_boxes(pdf_path, data, page, version=None, root=None,
-                  dpi=600, padding=None, pad_frac=None, fit_ink=None, clean=None, limit=None):
+def package_boxes(
+    pdf_path,
+    data,
+    page,
+    version=None,
+    root=None,
+    dpi=600,
+    padding=None,
+    pad_frac=None,
+    fit_ink=None,
+    clean=None,
+    limit=None,
+):
     """Write a per-box folder for every entry with a ``box_2d``. Returns count.
 
     With ``clean`` (default ``config.CROP_CLEAN``) box.jpg is the cleaned per-word
     crop (matching the cleaned strokes so the teal overlay stays aligned)."""
     from .vectorize import clean_word
+
     padding = config.CROP_PADDING if padding is None else padding
     pad_frac = config.CROP_PAD_FRAC if pad_frac is None else pad_frac
     fit_ink = config.CROP_FIT_INK if fit_ink is None else fit_ink
@@ -56,7 +67,10 @@ def package_boxes(pdf_path, data, page, version=None, root=None,
         if "box_2d" not in entry:
             continue
         bdir = paths.ensure_dir(paths.box_dir(pdf_path, page, i, version, root))
-        if clean:
+        # respect the per-word gate decision from vectorize (metadata["cleaned"])
+        # so box.jpg matches the crop the strokes were normalized to.
+        use_clean = clean and entry.get("metadata", {}).get("cleaned", True)
+        if use_clean:
             crop, _, _ = clean_word(page_image, entry["box_2d"], padding, pad_frac)
         else:
             crop, _ = crop_to_box(page_image, entry["box_2d"], padding, pad_frac, fit_ink)
@@ -65,7 +79,8 @@ def package_boxes(pdf_path, data, page, version=None, root=None,
             f.write(entry.get("text", ""))
         crop.save(os.path.join(bdir, paths.BOX_IMAGE_FILE), quality=95, subsampling=0)
         draw_vectorized(crop, entry.get("points", [])).save(
-            os.path.join(bdir, paths.BOX_VECTORIZED_FILE))
+            os.path.join(bdir, paths.BOX_VECTORIZED_FILE)
+        )
 
         made += 1
         if made % 10 == 0:
@@ -78,18 +93,30 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Assemble one folder per detected box")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Source PDF")
     p.add_argument("--page", type=int, default=2, help="Page number, 1-based")
-    p.add_argument("--strokes", default=None,
-                   help="Strokes JSON (default: canonical strokes for --pdf/--page)")
+    p.add_argument(
+        "--strokes", default=None, help="Strokes JSON (default: canonical strokes for --pdf/--page)"
+    )
     p.add_argument("--output-root", default=paths.OUTPUT_ROOT, help="Root output folder")
-    p.add_argument("--version", type=int, default=None,
-                   help="Page version to read/write (default: latest existing)")
+    p.add_argument(
+        "--version",
+        type=int,
+        default=None,
+        help="Page version to read/write (default: latest existing)",
+    )
     p.add_argument("--limit", type=int, default=None, help="Package only the first N boxes")
     p.add_argument("--dpi", type=int, default=600, help="Render DPI for crops")
     p.add_argument("--padding", type=int, default=config.CROP_PADDING, help="Crop padding (px)")
-    p.add_argument("--pad-frac", type=float, default=config.CROP_PAD_FRAC,
-                   help="Extra crop padding as a fraction of box size")
-    p.add_argument("--no-fit-ink", action="store_true",
-                   help="Disable growing the box until no ink touches its borders")
+    p.add_argument(
+        "--pad-frac",
+        type=float,
+        default=config.CROP_PAD_FRAC,
+        help="Extra crop padding as a fraction of box size",
+    )
+    p.add_argument(
+        "--no-fit-ink",
+        action="store_true",
+        help="Disable growing the box until no ink touches its borders",
+    )
     p.add_argument("--no-qa", action="store_true", help="Skip the transcript QA check")
     return p.parse_args(argv)
 
@@ -97,19 +124,32 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     root = args.output_root
-    version = args.version if args.version is not None else paths.latest_version(args.pdf, args.page, root)
+    version = (
+        args.version
+        if args.version is not None
+        else paths.latest_version(args.pdf, args.page, root)
+    )
     if version is None and not args.strokes:
         raise SystemExit("No processed version found; run ocr.vectorize first or pass --strokes.")
 
     strokes_path = args.strokes or paths.strokes_json(args.pdf, args.page, version, root)
     with open(strokes_path) as f:
         data = json.load(f)
-    package_boxes(args.pdf, data, args.page, version=version, root=root,
-                  dpi=args.dpi, padding=args.padding, pad_frac=args.pad_frac,
-                  fit_ink=not args.no_fit_ink, limit=args.limit)
+    package_boxes(
+        args.pdf,
+        data,
+        args.page,
+        version=version,
+        root=root,
+        dpi=args.dpi,
+        padding=args.padding,
+        pad_frac=args.pad_frac,
+        fit_ink=not args.no_fit_ink,
+        limit=args.limit,
+    )
 
     if not args.no_qa:
-        passed, report = qa.run_qa(args.pdf, args.page, version, root)
+        _passed, report = qa.run_qa(args.pdf, args.page, version, root)
         print("\n" + report)
 
 
