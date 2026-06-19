@@ -1,5 +1,6 @@
 """Unit tests for data.py pure stroke transforms (fixed seeds, tiny synthetic inputs)."""
 
+import inspect
 import random
 from types import SimpleNamespace
 
@@ -167,15 +168,59 @@ def test_augment_stroke_identity_ranges_only_downsample():
     assert all(tuple(np.round(p, 6)) in inset for p in out)  # output is a subset of input
 
 
-def test_augment_default_slant_is_symmetric_and_wider_than_old():
-    # Old slant was one-directional and narrow (-0.22..-0.18); the new default shear range
-    # (-0.3, 0.3) tilts x BOTH ways and reaches a larger magnitude. dx = 2 * shear_factor.
+def test_no_augment_flag_keeps_downsample_identical():
+    # Fairness invariant for the with-vs-without-augmentation A/B: identity geometric ranges
+    # must consume the SAME RNG draws as the wide default, so the downsample (and therefore the
+    # sequence length / truncation) is byte-identical -- the two arms differ ONLY in geometry.
+    ds, word = _aug_dataset()
+    np.random.seed(11)
+    random.seed(11)
+    ds.augment_stroke(  # identity geometry (what --no-augment routes to)
+        word.copy(),
+        shear_range=(0.0, 0.0),
+        rotate_range=(0.0, 0.0),
+        height_scale_range=(1.0, 1.0),
+        width_scale_range=(1.0, 1.0),
+        height_jitter=0.0,
+    )
+    after_identity = np.random.rand()
+    np.random.seed(11)
+    random.seed(11)
+    ds.augment_stroke(word.copy())  # wide default geometry
+    after_wide = np.random.rand()
+    assert after_identity == after_wide  # same number of RNG draws -> same downsampling
+
+
+def test_dataset_reads_augment_geometric_flag():
+    # StrokeDataset picks up args.augment_geometric (default True; False with --no-augment).
+    args = SimpleNamespace(
+        alphabet=" abc",
+        augment=True,
+        max_seq_length=64,
+        seed=0,
+        downsample_mean=0.65,
+        downsample_width=0.1,
+        augment_geometric=False,
+    )
+    word = np.array([[0.0, 0.0, 1], [0.1, 0.1, 0]])
+    ds = d.StrokeDataset([[word]], ["a"], args)
+    assert ds.augment_geometric is False
+    del args.augment_geometric  # absent -> defaults to True (back-compat)
+    assert d.StrokeDataset([[word]], ["a"], args).augment_geometric is True
+
+
+def test_augment_default_slant_is_symmetric_and_moderate():
+    # Guard the DEFAULT shear band: symmetric (both-way) and MODERATE. An earlier wide +-0.3
+    # band added variety but wrecked legibility (best test loss 2.08 vs 1.18), so the default
+    # was narrowed; this catches a silent re-widening. dx = 2 * shear_factor on a unit segment.
+    lo, hi = inspect.signature(d.StrokeDataset.augment_stroke).parameters["shear_range"].default
+    assert lo == -hi and 0.0 < hi <= 0.2  # symmetric and moderate (not the old wide 0.3)
     base = np.array([[0.0, 1.0, 1], [0.0, -1.0, 1]])  # vertical segment: x' = x + factor*y
     dx = []
     for s in range(200):
         np.random.seed(s)
-        o = d.random_horizontal_shear(base.copy(), shear_range=(-0.3, 0.3))
+        o = d.random_horizontal_shear(base.copy(), shear_range=(lo, hi))
         dx.append(o[0, 0] - o[1, 0])
     dx = np.array(dx)
-    assert dx.min() < -0.3 and dx.max() > 0.3  # both directions, wider than the old range
-    assert np.all(np.abs(dx) <= 0.6 + 1e-9)  # bounded by 2 * 0.3
+    assert dx.min() < -hi and dx.max() > hi  # tilts both directions
+    assert np.all(np.abs(dx) <= 2 * hi + 1e-9)  # bounded by 2 * shear magnitude

@@ -108,3 +108,51 @@ tightly, so individual letters are rougher and some warmups generate degenerate 
 (filtered out of these strips). The augmentation is clearly *learnable and does not break
 training*; a rigorous with-vs-without legibility comparison at a larger step budget is
 future work.
+
+## controlled with-vs-without A/B (`aug_vs_noaug_01.png`)
+
+The "future work" above, done as a **matched, single-variable A/B**. Two bigbank models,
+**identical config and the same seed (42)**, differing only in augmentation:
+
+```
+# A (WITH, default):   python scripts/train_local.py --dataset bigbank --num_words 2 \
+#   --max_seq_length 512 --batch_size 16 --step_lr_every 2000 --lr_decay 0.5 --steps 7000
+# B (WITHOUT):         ...same flags... --no-augment
+```
+
+`--no-augment` (added to `train_local.py`) routes `StrokeDataset` through `augment_stroke`
+with **identity** geometric ranges. Because `np.random.uniform(a, a)` still consumes one
+RNG draw, the downsampling (hence sequence length and the 23% truncation) is **byte-identical**
+between arms -- the only variable is the slant/incline/height/width/jitter geometry. The
+fairness invariant is locked by `test_no_augment_flag_keeps_downsample_identical`.
+
+| arm     | augmentation | steps | wall-clock (MPS) | train loss   | **best test loss** |
+|---------|--------------|-------|------------------|--------------|--------------------|
+| A       | WITH (wide)  | 7000  | ~11.4 min        | 6.45 → 1.87  | **2.08**           |
+| B       | WITHOUT      | 7000  | ~11.5 min        | 6.50 → 0.96  | **1.18**           |
+
+**Style variety** -- same 5 words rendered from 6 warmup seeds each (greedy, seeded for
+reproducibility); spread is measured across the 6 renders of each word, averaged over words
+(`runs/_ab_variety.py`, metrics in `runs/ab_variety_metrics.json`):
+
+| spread metric        | WITH  | WITHOUT | WITH / WITHOUT |
+|----------------------|-------|---------|----------------|
+| slant (std of x-on-y slope) | 1.233 | 0.769 | **x1.60**  |
+| width (coef. of var.)       | 0.472 | 0.379 | **x1.25**  |
+| height (coef. of var.)      | 0.465 | 0.512 | x0.91 (≈equal) |
+
+**Conclusion -- the two effects are both real and they trade off:**
+
+- **Variety: augmentation wins on slant** (x1.60) and modestly on width (x1.25). In
+  `aug_vs_noaug_01.png` the per-panel slant labels span a much wider range in the WITH-aug
+  rows (e.g. "writing": −1.14 / +1.60 / +5.54) than the NO-aug rows (clustered near ±1).
+  **Height variety is *not* increased** -- the layout/decode normalizes vertical scale, and
+  bigbank's natural cross-writer variation already gives the NO-aug arm a height baseline.
+- **Legibility: no-augmentation wins decisively** -- best test loss **1.18 vs 2.08**, and
+  in the figure the NO-aug rows render *legible* "writing"/"summer" while the WITH-aug rows
+  are rougher/jaggier (some of the WITH slant spread is genuine style, some is roughness --
+  e.g. the +5.54 outlier is a jagged render, not clean italic).
+
+So the wide augmentation does what it was meant to (more handwriting variety, slant above
+all) but, at this small-model / ~11-min-per-arm scale, pays for it in legibility. A larger
+model or longer schedule would be needed to get *both* variety and clean letters.

@@ -70,6 +70,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--lr_decay", type=float, default=0.333, help="StepLR multiplicative decay")
     p.add_argument("--eval_every", type=int, default=500)
     p.add_argument("--num_samples", type=int, default=3, help="Sample images to save at the end")
+    p.add_argument(
+        "--no-augment",
+        dest="augment_geometric",
+        action="store_false",
+        help="Disable the geometric handwriting augmentation (slant/incline/scale/jitter); "
+        "downsampling is unchanged, for A/B comparison against the augmented default",
+    )
     # Sample generation budget. save_samples caps it at block_size-1, which can truncate the
     # last word of a multi-word prompt; raise this so every prompt word has room to render.
     p.add_argument(
@@ -99,6 +106,7 @@ def build_args(cli: argparse.Namespace, device: str):
     args.step_lr_every = cli.step_lr_every  # StepLR decay interval (model uses this)
     args.lr_decay = cli.lr_decay  # StepLR gamma
     args.max_steps = cli.steps
+    args.augment_geometric = cli.augment_geometric  # False with --no-augment
     args.local_checkpoint_path = os.path.join(RUNS_DIR, f"{cli.dataset}_local.pt")
     return args
 
