@@ -32,8 +32,13 @@ def draw_vectorized(
     color: tuple[int, int, int] = TEAL,
     width: int = 2,
 ) -> Image.Image:
-    """Draw box-relative [x, y, pen] strokes onto a copy of ``crop_image``."""
-    img = crop_image.copy()
+    """Draw box-relative [x, y, pen] strokes onto an RGB copy of ``crop_image``.
+
+    ``convert("RGB")`` (not ``copy()``) so a grayscale crop -- which
+    ``vectorize.clean_word`` returns as mode "L" -- can take the RGB overlay
+    colour instead of raising ``TypeError`` in PIL's drawing code.
+    """
+    img = crop_image.convert("RGB")
     draw = ImageDraw.Draw(img)
     w, h = img.size
     px = [(p[0] * w, p[1] * h, p[2]) for p in points]

@@ -85,6 +85,17 @@ def test_draw_vectorized_pen_up_draws_nothing():
     assert np.array_equal(np.array(out), np.array(img))
 
 
+def test_draw_vectorized_grayscale_crop():
+    # clean_word() returns a mode-"L" (grayscale) crop; drawing the RGB teal
+    # overlay on it must not crash and must yield an RGB image with the stroke.
+    img = Image.new("L", (40, 20), 255)
+    points = [[0.1, 0.5, 1], [0.9, 0.5, 1], [0.9, 0.5, 0]]
+    out = package_boxes.draw_vectorized(img, points)
+    assert out.mode == "RGB"
+    arr = np.array(out)
+    assert (arr[..., 0] != arr[..., 1]).any()  # a coloured (non-gray) pixel was drawn
+
+
 # --- qa.run_qa -----------------------------------------------------------------
 
 
