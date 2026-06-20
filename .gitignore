@@ -25,6 +25,7 @@ __pycache__
 !data/bigbank_3500.json.zip
 !data/cursive.json.zip
 !data/sample.json.zip
+!data/diarybank.json.zip
 paperspace.sh
 cursivetransformer.key
 
