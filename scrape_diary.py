@@ -1,13 +1,16 @@
-"""Scrape the American Diary Project diary pages into a single PDF.
+"""Scrape an American Diary Project diary's pages into a single PDF.
 
 A headless Selenium Chrome session loads each gallery page, downloads the
 full-resolution scan, and assembles the images into one PDF under ``outputs/``
-(named to signify full vs partial coverage). Use ``--pages N`` to fetch only the
-first N pages.
+(named from the diary slug + page range). Works for ANY diary on
+americandiaryproject.com: pass its collection page-gallery URL with ``--url``.
+The total page count is auto-detected from the gallery unless you pass
+``--pages`` (a count) and/or ``--start`` (1-based first page).
 """
 
 import argparse
 import os
+import re
 import shutil
 import time
 
@@ -20,11 +23,28 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
-# --- CONFIGURATION ---
-BASE_URL = "https://americandiaryproject.com/collection/1-10-2000-black-spiralbound-diary-from-a-new-yorker/"
-TOTAL_PAGES = 82
-TEMP_FOLDER = "diary_images"
+# Default diary: the 1-10-2000 black spiralbound diary from a New Yorker (82 pages).
+DEFAULT_URL = "https://americandiaryproject.com/collection/1-10-2000-black-spiralbound-diary-from-a-new-yorker/"
 OUTPUT_DIR = "outputs"
+
+
+def diary_slug(url):
+    """The collection slug from a diary URL ('.../collection/<slug>/' -> '<slug>')."""
+    m = re.search(r"/collection/([a-z0-9\-]+)", url)
+    return m.group(1) if m else "diary"
+
+
+def detect_total_pages(url):
+    """Read the gallery's reported page count (BWG embeds it as ``total-pages_0``).
+
+    Returns the int, or None if the page can't be fetched/parsed."""
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        m = re.search(r'total-pages_0">\s*(\d+)', r.text)
+        return int(m.group(1)) if m else None
+    except Exception as e:
+        print(f"⚠️ Could not detect page count: {e}")
+        return None
 
 
 def setup_driver():
@@ -40,6 +60,7 @@ def setup_driver():
     path = ChromeDriverManager().install()
     if path.endswith("THIRD_PARTY_NOTICES.chromedriver"):
         path = os.path.join(os.path.dirname(path), "chromedriver")
+    os.chmod(path, 0o755)  # webdriver-manager sometimes drops the +x bit
     driver = webdriver.Chrome(service=Service(path), options=options)
     return driver
 
@@ -90,27 +111,46 @@ def create_pdf(image_folder, output_pdf):
         print("No valid images to save.")
 
 
-def build_output_path(total_pages):
-    """Name the PDF so it signifies full vs partial content of the diary."""
-    if total_pages >= TOTAL_PAGES:
-        filename = f"diary_full_1-{TOTAL_PAGES}.pdf"
+def build_output_path(slug, start, end, total):
+    """Name the PDF from the diary slug + the page range it actually covers."""
+    if start == 1 and total and end >= total:
+        filename = f"{slug}_full_1-{total}.pdf"
     else:
-        filename = f"diary_partial_pages_1-{total_pages}.pdf"
+        filename = f"{slug}_pages_{start}-{end}.pdf"
     return os.path.join(OUTPUT_DIR, filename)
 
 
-def main(total_pages=TOTAL_PAGES):
+def main(url=DEFAULT_URL, start=1, pages=None):
+    slug = diary_slug(url)
+    total = detect_total_pages(url)
+    if total:
+        print(f"Diary '{slug}': {total} pages reported by gallery.")
+    # How many pages to grab: explicit --pages, else the rest of the diary.
+    if pages is None:
+        if not total:
+            raise SystemExit("Could not detect page count; pass --pages N explicitly.")
+        count = total - start + 1
+    else:
+        count = pages
+    end = start + count - 1
+    if total:
+        end = min(end, total)
+        count = end - start + 1
+    if count <= 0:
+        raise SystemExit(f"Empty range: start={start}, pages={pages}, total={total}")
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    output_pdf = build_output_path(total_pages)
-    os.makedirs(TEMP_FOLDER, exist_ok=True)
+    output_pdf = build_output_path(slug, start, end, total)
+    temp_folder = f"diary_images_{slug}"
+    os.makedirs(temp_folder, exist_ok=True)
 
     driver = setup_driver()
 
     try:
-        print(f"Starting download process for {total_pages} page(s)...")
+        print(f"Downloading pages {start}..{end} of '{slug}' -> {output_pdf}")
 
-        for page_num in range(1, total_pages + 1):
-            target_url = f"{BASE_URL}?page_number_0={page_num}"
+        for page_num in range(start, end + 1):
+            target_url = f"{url}?page_number_0={page_num}"
 
             driver.get(target_url)
 
@@ -123,7 +163,7 @@ def main(total_pages=TOTAL_PAGES):
                 img_url = img_element.get_attribute("src")
 
                 if img_url:
-                    file_name = f"{TEMP_FOLDER}/page_{page_num:02d}.jpg"
+                    file_name = f"{temp_folder}/page_{page_num:03d}.jpg"
                     download_image(img_url, file_name)
                 else:
                     print(f"⚠️ No image source found for page {page_num}")
@@ -135,24 +175,35 @@ def main(total_pages=TOTAL_PAGES):
             time.sleep(1)
 
         # Create PDF after all images are downloaded
-        create_pdf(TEMP_FOLDER, output_pdf)
+        create_pdf(temp_folder, output_pdf)
 
     finally:
         driver.quit()
         # Cleanup temp folder
-        if os.path.exists(TEMP_FOLDER):
-            shutil.rmtree(TEMP_FOLDER)
-            print(f"Cleaned up temporary folder: {TEMP_FOLDER}")
+        if os.path.exists(temp_folder):
+            shutil.rmtree(temp_folder)
+            print(f"Cleaned up temporary folder: {temp_folder}")
         print("Process complete.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Scrape diary pages into a PDF")
+    parser = argparse.ArgumentParser(description="Scrape an American Diary Project diary to PDF")
+    parser.add_argument(
+        "--url",
+        default=DEFAULT_URL,
+        help="Diary collection page-gallery URL (default: the 1-10-2000 NY diary)",
+    )
+    parser.add_argument(
+        "--start",
+        type=int,
+        default=1,
+        help="First page to scrape, 1-based (default: 1)",
+    )
     parser.add_argument(
         "--pages",
         type=int,
-        default=TOTAL_PAGES,
-        help=f"Number of pages to scrape, starting from page 1 (default: {TOTAL_PAGES})",
+        default=None,
+        help="Number of pages to scrape from --start (default: rest of the diary)",
     )
     args = parser.parse_args()
-    main(total_pages=args.pages)
+    main(url=args.url, start=args.start, pages=args.pages)
