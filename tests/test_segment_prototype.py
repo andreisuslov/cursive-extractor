@@ -7,6 +7,7 @@ order (the backtracking DFS in vectorize.trace_component) cannot mislabel points
 Pure-numpy logic only; no PDF render or cv2 trace needed.
 """
 
+import cv2
 import numpy as np
 
 from ocr import _segment_prototype as sp
@@ -171,6 +172,51 @@ def test_reject_noise_keeps_real_diacritic():
     out, _g, changed = sp.reject_noise(b, b.copy())
     assert not changed  # nothing dropped: the dot is above the speck floor
     assert out.sum() == b.sum()
+
+
+def test_is_black_block_flags_solid_block_and_tiny_fragment():
+    # a solid filled block is deeply over-inked, and a sub-letter fragment is too small:
+    # both are mis-cuts, never letters.
+    solid = np.zeros((44, 44), np.uint8)
+    solid[6:38, 6:38] = 255  # 32x32 fully-filled block -> deep over-ink core
+    assert sp.is_black_block(solid)
+    tiny = np.zeros((24, 24), np.uint8)
+    tiny[6:12, 6:15] = 255  # 6x9 fragment, max dim < BLOCK_SMALL_PX
+    assert sp.is_black_block(tiny)
+
+
+def test_is_black_block_keeps_thin_stroke_and_open_loop():
+    # a real pen stroke is thin (high skeleton/area, no deep core) -> never a black-block,
+    # even when its tight bbox is nearly full (a straight stem) or it is a closed loop.
+    stem = np.zeros((90, 40), np.uint8)
+    stem[8:82, 16:23] = 255  # a thin tall stem (l / i body)
+    assert not sp.is_black_block(stem)
+    ring = np.zeros((70, 70), np.uint8)
+    cv2.circle(ring, (35, 35), 26, 255, 5)  # an open 'o' ring: hollow, thin stroke
+    assert not sp.is_black_block(ring)
+
+
+def test_drop_offrow_drops_floating_sliver_keeps_diacritic_over_stem():
+    # a free-floating off-row sliver (no body column under it) is dropped; an i-dot sitting
+    # above a body stem is kept -- so adjacent-row bleed goes but real diacritics stay.
+    b = np.zeros((130, 180), np.uint8)
+    for x in (20, 55, 90):  # word body: thin stems in the x-height band (rows 55-105)
+        b[55:105, x : x + 10] = 255
+    b[24:32, 55:62] = 255  # an i-dot ABOVE a body stem (x~55) -> kept
+    frag = np.zeros_like(b)
+    frag[12:20, 135:159] = 255  # free-floating off-row sliver (no stem under it) -> dropped
+    b |= frag
+    out, _g, changed = sp.drop_offrow_components(b, np.full_like(b, 255))
+    assert changed
+    assert out.sum() == b.sum() - frag.sum()  # only the floating sliver removed (dot kept)
+
+
+def test_drop_offrow_noop_on_single_component():
+    # one connected word -> nothing to strip (the guard returns it unchanged).
+    b = np.zeros((60, 80), np.uint8)
+    b[10:50, 10:70] = 255
+    out, _g, changed = sp.drop_offrow_components(b, np.full_like(b, 255))
+    assert not changed and np.array_equal(out, b)
 
 
 def test_local_slope_returns_fallback_when_unreliable():

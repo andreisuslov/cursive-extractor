@@ -319,6 +319,7 @@ def prepare(page_image, box_2d: list[int], word: str, pitch_px: float) -> dict |
         binary, gray, box_2d, crop_box, page_image.size
     )
     binary, gray, _ = sp.reject_noise(binary, gray)
+    binary, gray, _ = sp.drop_offrow_components(binary, gray)
     h, w = binary.shape
     strokes = vectorize.trace_ink(binary)
     if not strokes:

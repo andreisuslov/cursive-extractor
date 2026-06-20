@@ -84,6 +84,17 @@ def test_noise_reject_drops_mislabeled_and_flags_unjudged():
     assert stats["n_total"] == 3 and stats["n_rejected"] == 1
 
 
+def test_reject_black_blocks_drops_solid_keeps_letter():
+    solid = np.zeros((40, 40), np.uint8)
+    solid[5:35, 5:35] = 255  # solid block -> dropped
+    stem = np.zeros((80, 30), np.uint8)
+    stem[6:74, 12:18] = 255  # thin stem -> kept
+    by_letter = {"a": [(solid, "a"), (stem, "all")]}
+    clean, stats = A.reject_black_blocks(by_letter)
+    assert len(clean["a"]) == 1 and clean["a"][0][1] == "all"  # only the letter survives
+    assert stats["n_blocks"] == 1 and stats["by_letter"]["a"] == 1
+
+
 def test_collect_slices_folds_case():
     records = [
         {

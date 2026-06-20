@@ -47,6 +47,7 @@ import torch
 
 from . import _bootstrap_recognizer as B
 from . import _recognizer as R
+from . import _segment_prototype as sp
 from . import paths, vectorize
 
 # --- knobs ------------------------------------------------------------------
@@ -92,6 +93,26 @@ def collect_slices(records: list[dict]) -> dict[str, list[tuple[np.ndarray, str]
         for ch, sl in rec["slices"]:
             by_letter[ch.lower()].append((sl, rec["word"]))
     return dict(by_letter)
+
+
+def reject_black_blocks(
+    by_letter: dict[str, list[tuple[np.ndarray, str]]],
+) -> tuple[dict[str, list[tuple[np.ndarray, str]]], dict]:
+    """Drop slices that are BLACK-BLOCKS (solid over-inked blobs / degenerate fragments)
+    before clustering, via the cut module's slice-level detector (``sp.is_black_block``).
+    These are mis-cuts that recur as a fake dominant 'variant'; this is a cut-quality
+    filter, not a relabel. Runs BEFORE the CNN noise filter so the report separates the two.
+    Returns ``(filtered_by_letter, stats)``."""
+    out: dict[str, list[tuple[np.ndarray, str]]] = {}
+    by_letter_drops: dict[str, int] = {}
+    n_total = n_blocks = 0
+    for letter, items in by_letter.items():
+        kept = [(m, w) for m, w in items if not sp.is_black_block(m)]
+        out[letter] = kept
+        by_letter_drops[letter] = len(items) - len(kept)
+        n_total += len(items)
+        n_blocks += len(items) - len(kept)
+    return out, {"n_total": n_total, "n_blocks": n_blocks, "by_letter": by_letter_drops}
 
 
 def noise_reject(
@@ -229,15 +250,19 @@ def build_library(records: list[dict], recognizer: B.CNNRecognizer, seed: int) -
     """Full pipeline 1-4. Returns ``(library, stats)``. ``library[letter]`` =
     ``{n_raw, n_clean, n_rejected, unjudged, silhouette, variants}``; a letter with
     fewer than ``MIN_FOR_VARIANTS`` clean slices gets a single medoid form (no split)."""
-    by_letter = collect_slices(records)
+    raw_by_letter = collect_slices(records)
+    by_letter, block_stats = reject_black_blocks(raw_by_letter)
     clean, stats = noise_reject(by_letter, recognizer)
+    stats["n_blocks"] = block_stats["n_blocks"]
+    stats["blocks_by_letter"] = block_stats["by_letter"]
     library: dict[str, dict] = {}
     for letter, items in sorted(clean.items()):
         masks = [m for m, _ in items]
         words = [w for _, w in items]
         n = len(items)
         entry = {
-            "n_raw": len(by_letter[letter]),
+            "n_raw": len(raw_by_letter[letter]),
+            "n_blocks": block_stats["by_letter"].get(letter, 0),
             "n_clean": n,
             "n_rejected": stats["rej_by_letter"][letter],
             "unjudged": letter in stats["unjudged"],
@@ -363,6 +388,12 @@ def main(argv: list[str] | None = None) -> dict:
 def _print_report(library: dict, stats: dict) -> None:
     n_total, n_rej = stats["n_total"], stats["n_rejected"]
     rate = n_rej / n_total if n_total else 0.0
+    n_blocks = stats.get("n_blocks", 0)
+    raw_total = n_total + n_blocks  # noise_reject's n_total is already post-black-block
+    print("\n=== 1b. BLACK-BLOCK REJECTION (solid over-inked blobs / degenerate fragments) ===")
+    brate = n_blocks / raw_total if raw_total else 0.0
+    print(f"slices: {raw_total}   black-blocks dropped: {n_blocks} ({brate:.0%})   kept: {n_total}")
+
     print("\n=== 2. NOISE REJECTION (CNN top-1 != labeled letter -> dropped) ===")
     print(
         f"slices: {n_total}   rejected: {n_rej} ({rate:.0%})   kept: {n_total - n_rej}   "
@@ -370,7 +401,9 @@ def _print_report(library: dict, stats: dict) -> None:
     )
 
     print("\n=== 3-4. PER-LETTER LIBRARY (clean slices -> variant forms) ===")
-    print(f"{'L':<3}{'raw':>5}{'clean':>7}{'rej':>5}{'forms':>7}{'sil':>7}  variant counts")
+    print(
+        f"{'L':<3}{'raw':>5}{'blk':>5}{'clean':>7}{'rej':>5}{'forms':>7}{'sil':>7}  variant counts"
+    )
     have_variants = 0
     multi = 0
     sils = []
@@ -386,8 +419,8 @@ def _print_report(library: dict, stats: dict) -> None:
         sil = f"{e['silhouette']:.2f}" if e["silhouette"] is not None else "  -"
         vc = " ".join(str(v["count"]) for v in e["variants"])
         print(
-            f"{letter:<3}{e['n_raw']:>5}{e['n_clean']:>7}{e['n_rejected']:>5}"
-            f"{nvar:>7}{sil:>7}  {vc}"
+            f"{letter:<3}{e['n_raw']:>5}{e.get('n_blocks', 0):>5}{e['n_clean']:>7}"
+            f"{e['n_rejected']:>5}{nvar:>7}{sil:>7}  {vc}"
         )
 
     mean_sil = float(np.mean(sils)) if sils else 0.0

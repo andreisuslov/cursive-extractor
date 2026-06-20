@@ -395,6 +395,126 @@ def reject_noise(binary: np.ndarray, gray: np.ndarray) -> tuple[np.ndarray, np.n
     return out_bin, out_gray, True
 
 
+# --- Step 1d: BLACK-BLOCK slice detector (solid over-inked blobs) -------------
+# A mis-cut emits a SOLID over-inked blob as a "letter": a merged-neighbour smudge, a
+# descender-bleed clump, or a degenerate sub-letter fragment the cut carved between two
+# too-close boundaries. None are letters (a real pen stroke is THIN), but they recur and
+# pollute a per-letter library as a dominant fake "variant" -- the page-1..4 allograph
+# library's most common 'a'/'e'/'s' forms were exactly these (a 9x8 solid blob, a 3x6
+# solid block, a filled triangle). A slice is a black-block when it is (a) far too small
+# to be a letter at this DPI, OR (b) a fat solid mass -- very high ink-fill with almost no
+# skeleton structure, OR (c) deeply over-inked: a real pen stroke is ~2 stroke-widths
+# thick, so almost no pixel sits many px from an edge; a solid blob has a large DEEP-ink
+# core. Tuned on the page-1..4 slices so NO real letter trips it (the deep gate clears the
+# thickest real hands -- 'h','m','n' merged ligatures -- by a margin). Letter-SIZED
+# moderate-fill blobs are deliberately LEFT IN: geometry cannot separate them from a
+# genuinely thick hand, so removing them would eat real letters -- reported honestly.
+# ponytail: thresholds assume the pipeline's fixed 600-DPI render (stroke ~6px); scale
+# BLOCK_DEEP_PX / BLOCK_SMALL_PX with DPI if that default ever moves.
+BLOCK_SMALL_PX = 20  # max(h, w) below this -> a sub-letter fragment (real letters are >=~40)
+BLOCK_FILL = 0.62  # ink/bbox >= this AND...
+BLOCK_SKEL = 0.060  # ...skeleton-length/area <= this -> a fat solid blob (no stroke core)
+BLOCK_DEEP_PX = 7  # a pixel deeper than this many px from any edge is "core" (over-)ink
+BLOCK_DEEP_FRAC = 0.24  # core-ink fraction >= this -> over-inked block (real letters < 0.20)
+BLOCK_FLAT_AR = 2.2  # width/height >= this AND...
+BLOCK_FLAT_FILL = 0.72  # ...fill >= this -> a wide-flat solid bar (real wide m/w fill ~0.4)
+
+
+def black_block_features(mask: np.ndarray) -> tuple[int, int, float, float, float] | None:
+    """``(h, w, fill, skel_len/area, deep_ink_frac)`` for an ink ``mask``, or ``None`` if
+    empty. ``deep_ink_frac`` is the share of ink pixels more than ``BLOCK_DEEP_PX`` from any
+    edge (high for a solid blob, ~0 for a thin pen stroke)."""
+    m = (mask > 0).astype(np.uint8)
+    ys, xs = np.nonzero(m)
+    if xs.size == 0:
+        return None
+    h = int(ys.max() - ys.min() + 1)
+    w = int(xs.max() - xs.min() + 1)
+    area = int(m.sum())
+    fill = area / float(h * w)
+    skel_area = int((vectorize.zhang_suen(m * 255) > 0).sum()) / max(1, area)
+    dt = cv2.distanceTransform(m, cv2.DIST_L2, 5)[m > 0]
+    deep = float((dt > BLOCK_DEEP_PX).mean()) if dt.size else 0.0
+    return h, w, fill, skel_area, deep
+
+
+def is_black_block(mask: np.ndarray) -> bool:
+    """True when ``mask`` is a solid over-inked blob / degenerate fragment, not a letter
+    (see the module note). Used to reject such slices before they enter a per-letter
+    library; conservative so it never drops a real (even thick) letter."""
+    f = black_block_features(mask)
+    if f is None:
+        return False
+    h, w, fill, skel_area, deep = f
+    return (
+        max(h, w) < BLOCK_SMALL_PX
+        or (fill >= BLOCK_FILL and skel_area <= BLOCK_SKEL)
+        or deep >= BLOCK_DEEP_FRAC
+        or (w >= BLOCK_FLAT_AR * h and fill >= BLOCK_FLAT_FILL)
+    )
+
+
+# --- Step 1e: drop adjacent-ROW/WORD bleed (disconnected off-row ink) ---------
+# On the densely-ruled pages 2-3 the row pitch is barely a row-height, so even after the
+# central-band clip the tips of the rows above/below (and same-line neighbours the box-x
+# drop missed) leak in as SMALL DISCONNECTED components riding the top/bottom of the band.
+# Left in, they fall inside an edge letter's x-slot and contaminate it. We drop a non-main
+# component that sits OUTSIDE the word's body rows AND has no main (word) ink in its
+# x-column -- i.e. it is not perched over a stem. This SPARES diacritics (an i-dot / t-cross
+# sits over its own stem, so body ink shares its x -> kept) and ascenders/descenders
+# (connected to the body, so they extend INTO the body band, never fully off it). The
+# "body" is the dense x-height band (the p20..p80 rows of ALL ink, not one component, so a
+# diacritic over a BROKEN cursive body is still spared); only ink fully off that band with
+# no body column under it is dropped. Conservative: a narrow off-row fragment that happens
+# to align with a body column is kept, not risked -- so it never eats a real diacritic.
+NEIGHBOR_BODY_LO = 0.20  # word body rows = ALL-ink y-percentiles between these bounds
+NEIGHBOR_BODY_HI = 0.80
+
+
+def drop_offrow_components(
+    binary: np.ndarray, gray: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Drop free-floating adjacent-row/word ink (disconnected components that sit off the
+    word's body band with no body column under them), then re-tighten. Returns
+    ``(binary, gray, changed)``. Spares diacritics and connected ascenders/descenders (see
+    the module note)."""
+    H, W = binary.shape
+    if H == 0 or W == 0 or not binary.any():
+        return binary, gray, False
+    n, labels, stats, _ = cv2.connectedComponentsWithStats((binary > 0).astype(np.uint8), 8)
+    if n <= 2:  # 0 or 1 real component -> nothing to strip
+        return binary, gray, False
+    ink = binary > 0
+    ink_rows = np.nonzero(ink)[0]
+    lo = float(np.percentile(ink_rows, 100 * NEIGHBOR_BODY_LO))
+    hi = float(np.percentile(ink_rows, 100 * NEIGHBOR_BODY_HI))
+    ilo, ihi = int(np.floor(lo)), int(np.ceil(hi)) + 1
+    body_cols = ink[ilo:ihi, :].any(axis=0)  # columns carrying dense x-height ink
+    dt = cv2.distanceTransform((binary > 0).astype(np.uint8), cv2.DIST_L2, 5)[binary > 0]
+    tol = max(2, round(float(np.median(dt)))) if dt.size else 2  # ~1 stroke radius
+    keep = np.zeros_like(ink)
+    dropped = False
+    for lbl in range(1, n):
+        x, y, w, h, a = stats[lbl]
+        overlaps_body = not (y + h <= lo or y >= hi)
+        over_body = bool(body_cols[max(0, x - tol) : min(W, x + w + tol)].any())
+        if a < 14 or overlaps_body or over_body:  # crumb / body-height / over a stem -> keep
+            keep |= labels == lbl
+        else:  # free-floating off-row ink -> drop
+            dropped = True
+    if not dropped:
+        return binary, gray, False
+    out_bin = np.where(keep, binary, 0)
+    if not out_bin.any():
+        return binary, gray, False
+    ys, xs = np.nonzero(out_bin)
+    tx0, ty0, tx1, ty1 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+    out_bin = out_bin[ty0:ty1, tx0:tx1]
+    out_gray = np.full((ty1 - ty0, tx1 - tx0), 255, dtype=gray.dtype)
+    out_gray[out_bin > 0] = gray[ty0:ty1, tx0:tx1][out_bin > 0]
+    return out_bin, out_gray, True
+
+
 # --- Step 2: classify components into BODY vs DIACRITIC ---------------------
 
 
@@ -1161,6 +1281,9 @@ def segment_word(
     # Step 1c: reject stray noise (clipped neighbour-row tips / next-word slivers) so
     # it is never a letter, a slant landmark, or a false cut column.
     binary, gray, _ = reject_noise(binary, gray)
+    # Step 1e: drop free-floating adjacent-row/word ink the band clip still let through on
+    # dense pages (spares diacritics + connected ascenders/descenders).
+    binary, gray, _ = drop_offrow_components(binary, gray)
     h, w = binary.shape
 
     strokes = vectorize.trace_ink(binary)
