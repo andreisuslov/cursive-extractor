@@ -232,25 +232,25 @@ def align_boundaries(
     min_w = ALIGN_MIN_WFRAC * span / L
     gmax = len(geom_score) - 1
 
-    # Emission cache: descriptor of each window [a, b] (cand indices a < b), scored
-    # against the distinct chars only. Computed lazily on demand.
-    desc_cache: dict[tuple[int, int], np.ndarray] = {}
+    # Emission cache: per-char score dict of each window [a, b] (cand indices a < b),
+    # computed lazily on demand. Going through ``rec.scores`` (not the template matmul
+    # directly) keeps this recognizer-agnostic -- any object exposing
+    # ``scores(binary) -> {char: score}`` plugs in (the font templates OR a trained
+    # CNN, see ``ocr._bootstrap_recognizer``). For the font recognizer this is
+    # behaviour-identical to the old descriptor-cosine path.
+    score_cache: dict[tuple[int, int], dict[str, float]] = {}
 
-    def window_desc(a: int, b: int) -> np.ndarray:
+    def window_scores(a: int, b: int) -> dict[str, float]:
         key = (a, b)
-        d = desc_cache.get(key)
-        if d is None:
+        s = score_cache.get(key)
+        if s is None:
             lo, hi = int(p[a]), max(int(p[a]) + 1, int(p[b]) + 1)
-            d = descriptor((binary[:, lo:hi] > 0).astype(np.uint8) * 255, rec.size)
-            desc_cache[key] = d
-        return d
+            s = rec.scores((binary[:, lo:hi] > 0).astype(np.uint8) * 255)
+            score_cache[key] = s
+        return s
 
     def emission(ch: str, a: int, b: int) -> float:
-        T = rec.templates.get(ch)
-        if T is None:
-            return 0.0
-        d = window_desc(a, b)
-        return float((T @ d).max()) if d.any() else 0.0
+        return window_scores(a, b).get(ch, 0.0)
 
     def reg(boundary_ix: int, k: int) -> float:
         """geometry + width-prior term attached to internal boundary ``boundary_ix``
@@ -376,24 +376,33 @@ def geometry_boundaries(prep: dict, word: str) -> tuple[list[float], np.ndarray]
 
 
 def recognition_boundaries(
-    prep: dict, word: str, geom_score: np.ndarray, alpha: float = ALIGN_ALPHA
+    prep: dict,
+    word: str,
+    geom_score: np.ndarray,
+    alpha: float = ALIGN_ALPHA,
+    recognizer: LetterRecognizer | None = None,
 ) -> list[float]:
     """Recognition-guided cut: forced alignment over candidate columns, geometry +
     width prior blended in. Falls back to geometry candidates for the column grid."""
     sbin, x_min, x_max = prep["sbin"], prep["x_min"], prep["x_max"]
     cand_x, _ = sp.grid_candidates(geom_score, x_min, x_max)
-    return align_boundaries(sbin, word, x_min, x_max, cand_x, geom_score, alpha=alpha)
+    return align_boundaries(
+        sbin, word, x_min, x_max, cand_x, geom_score, recognizer=recognizer, alpha=alpha
+    )
 
 
 # --- 4. measurement ---------------------------------------------------------
 
 
-def recognition_accuracy(prep: dict, word: str, boundaries: list[float]) -> dict:
+def recognition_accuracy(
+    prep: dict, word: str, boundaries: list[float], recognizer: LetterRecognizer | None = None
+) -> dict:
     """Recognise each letter slice cut at ``boundaries`` (in de-sheared space) and
     score against the KNOWN char: top-1, case-insensitive top-1, mean true-char rank.
     This is the real metric -- a higher top-1 here means the cut produced slices that
-    genuinely look more like their letters."""
-    rec = get_recognizer()
+    genuinely look more like their letters. ``recognizer`` defaults to the font-template
+    bank; pass a trained ``CNNRecognizer`` to measure with the bootstrap recognizer."""
+    rec = recognizer or get_recognizer()
     cuts = [prep["x_min"], *sorted(boundaries), prep["x_max"]]
     slices = slice_columns(prep["sbin"], cuts)
     top1 = ci_top1 = 0
@@ -420,18 +429,25 @@ def recognition_accuracy(prep: dict, word: str, boundaries: list[float]) -> dict
 
 
 def evaluate_word(
-    page_image, box_2d, word, pitch_px, overlay_dir=None, alpha: float = ALIGN_ALPHA
+    page_image,
+    box_2d,
+    word,
+    pitch_px,
+    overlay_dir=None,
+    alpha: float = ALIGN_ALPHA,
+    recognizer: LetterRecognizer | None = None,
 ) -> dict | None:
     """Cut one word both ways and measure. Optionally writes geometry/recognition
-    overlays for visual QA."""
+    overlays for visual QA. ``recognizer`` (font templates by default) is used BOTH to
+    guide the recognition cut AND to score per-letter top-1 in both rows."""
     word = word.strip()
     prep = prepare(page_image, box_2d, word, pitch_px)
     if prep is None or len(word) < 2:
         return None
     geo_bxs, geom_score = geometry_boundaries(prep, word)
-    rec_bxs = recognition_boundaries(prep, word, geom_score, alpha=alpha)
-    geo = recognition_accuracy(prep, word, geo_bxs)
-    rec = recognition_accuracy(prep, word, rec_bxs)
+    rec_bxs = recognition_boundaries(prep, word, geom_score, alpha=alpha, recognizer=recognizer)
+    geo = recognition_accuracy(prep, word, geo_bxs, recognizer=recognizer)
+    rec = recognition_accuracy(prep, word, rec_bxs, recognizer=recognizer)
     conf = sp.compute_confidence(geom_score, geo_bxs, word, prep["x_min"], prep["x_max"])
     if overlay_dir:
         paths.ensure_dir(overlay_dir)
