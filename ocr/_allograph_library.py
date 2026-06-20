@@ -6,11 +6,11 @@ Stands on the two pieces that already work: the ~91% per-letter segmenter
 (``ocr._bootstrap_recognizer``, ~44% real held-out top-1, weights in ``runs/recog/``).
 The flow, all driven from ``main``::
 
-    python -m ocr._allograph_library --pdf test_document --page 4
+    python -m ocr._allograph_library --pdf test_document --pages 1 2 3 4
 
-  1. EXTRACT  -- every page-4 word -> per-letter slices labeled by the transcription
-     char (reuses ``_bootstrap_recognizer.extract_words``: geometry cut, recognizer-free,
-     so the label set is not circular w.r.t. the CNN that filters it next).
+  1. EXTRACT  -- every word (pooled across ``--pages``) -> per-letter slices labeled by the
+     transcription char (reuses ``_bootstrap_recognizer.extract_words``: geometry cut,
+     recognizer-free, so the label set is not circular w.r.t. the CNN that filters it next).
   2. NOISE-REJECT -- drop a slice when the CNN recognizer does NOT classify it as its
      labeled letter (case-insensitive). Those are the mis-cuts / neighbour-row ink the
      91% segmenter leaves behind, so the library stays clean. This is a SELF-CONSISTENCY
@@ -299,7 +299,13 @@ def visualize(library: dict, letters: list[str], path: str) -> list[str]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Build a per-writer allograph (letter-form) library")
     p.add_argument("--pdf", default="test_document", help="Source PDF (slug or path)")
-    p.add_argument("--page", type=int, default=4, help="Page number, 1-based")
+    p.add_argument(
+        "--pages",
+        type=int,
+        nargs="+",
+        default=[4],
+        help="Page numbers, 1-based; multiple pages are pooled into one library",
+    )
     p.add_argument("--version", type=int, default=None, help="Page version (default: latest)")
     p.add_argument("--dpi", type=int, default=600, help="Render DPI for the source page")
     p.add_argument("--seed", type=int, default=0, help="k-means seed")
@@ -318,10 +324,21 @@ def main(argv: list[str] | None = None) -> dict:
     args = parse_args(argv)
     torch.manual_seed(args.seed)
 
-    print(f"\n=== EXTRACT (page {args.page}, geometry cut, label = transcription char) ===")
-    records, _, _ = B.extract_words(args.pdf, args.page, args.version, args.dpi)
+    pages = args.pages
+    print(
+        f"\n=== EXTRACT (pages {' '.join(map(str, pages))}, geometry cut, "
+        "label = transcription char) ==="
+    )
+    records: list[dict] = []
+    for pg in pages:
+        recs, _, _ = B.extract_words(args.pdf, pg, args.version, args.dpi)
+        print(f"  page {pg}: {len(recs)} words, {sum(B.class_counts(recs).values())} alpha slices")
+        records.extend(recs)
     counts = B.class_counts(records)
-    print(f"words: {len(records)}   alpha slices: {sum(counts.values())}   classes: {len(counts)}")
+    print(
+        f"pooled: {len(records)} words   {sum(counts.values())} alpha slices   "
+        f"{len(counts)} classes"
+    )
 
     recognizer, source = load_recognizer(args.weights, records, args.epochs, args.seed)
     print(f"noise-filter CNN: {source} ({len(recognizer.classes)} classes)")
