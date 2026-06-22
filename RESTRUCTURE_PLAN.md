@@ -1,13 +1,14 @@
 # Folder-Restructure Plan — cursivetransformer
 
-Status legend: `[ ]` planned · `[x]` done
+Status: **COMPLETE** (2026-06-22). Every phase landed on `ocr-stroke-recovery`,
+each gated by `ruff check . && ruff format --check . && pytest -q` (148 passed).
 
 ## Goal
 Make the repo legible without fighting its intentional design. The flat,
 bare-import **training core** (`data.py`, `model.py`, `sample.py`, `train.py`,
 imported as `from data import …`) is load-bearing — pytest `pythonpath=["."]`,
 the `scripts/` `sys.path` inserts, and `sample.py`/`train.py` self-appends all
-rely on it. We work *around* it.
+rely on it. We worked *around* it.
 
 ## Rejected: `src/` package rewrite
 A `src/cursivetransformer/` layout was evaluated and rejected (adversarial audit
@@ -20,45 +21,52 @@ research repo.
 ```
 python3 -m ruff check . && python3 -m ruff format --check . && python3 -m pytest -q
 ```
-Must stay **148 passed**, ruff clean.
 
 ---
 
 ## Phase 1 — Conservative cleanup (untracked/ignored only; no commit)
-- [ ] `rm -rf diary_scraper/` — untracked, 1 file (39 B), vestigial
-- [ ] `rm data/__init__.py` — untracked, vestigial half-package (`import data` → `data.py`)
-- [ ] `rm -rf outputs/_fleet/` — gitignored orchestration scratch
-- [ ] `data/content/` (20 MB, untracked) — **preserve**, not delete: it holds the
-  only `test_document.pdf` (the OCR default slug anchor). It rides along to
-  `datasets/content/` in Phase 2d.
+- [x] `rm -rf diary_scraper/` — untracked vestigial (39 B)
+- [x] `rm data/__init__.py` — untracked vestigial half-package
+- [x] `rm -rf outputs/_fleet/` — gitignored orchestration scratch
+- [x] `data/content/` — preserved, rode along to `datasets/content/` in 2d
 
-## Phase 2 — Moderate grouping (4 independent commits, each gated)
+## Phase 2 — Moderate grouping (4 commits, each gated)
 
-### 2a — Isolate OCR experiments → `ocr/experiments/`
-- [ ] `git mv` the 7 research modules (`_allograph_library`, `_bootstrap_recognizer`,
-  `_htr_align`, `_order_recovery_experiment`, `_overlay_inspect`, `_recognizer`,
-  `_segment_prototype`) into `ocr/experiments/`; add `ocr/experiments/__init__.py`.
-- [ ] Update the 6 test imports: `from ocr import _x` → `from ocr.experiments import _x`
-  (and the dotted `from ocr._order_recovery_experiment import run`).
-- Safe: `ocr/__init__.py` doesn't re-export them; their `from ocr.vectorize import …`
-  keeps working (vectorize stays put).
+### 2a — `ocr/experiments/` (commit `f4c12e9`)
+- [x] `git mv` 7 research modules in; add `ocr/experiments/__init__.py`
+- [x] rewrite parent imports `from . import paths, vectorize` / `from .config …`
+  → absolute `from ocr import …` (audit missed these; siblings stay relative)
+- [x] update 6 test modules to `from ocr.experiments import …`
 
-### 2b — Group the scraper pair → `scraper/`
-- [ ] `git mv scrape_diary.py fetch_transcript.py scraper/`
-- `fetch_transcript`'s `from scrape_diary import …` keeps working (co-located).
+### 2b — `scraper/` (commit `58c528f`)
+- [x] `git mv scrape_diary.py fetch_transcript.py scraper/`; CLAUDE.md ref
+- [x] ruff import-group fix for the now-relocated `from scrape_diary import …`
 
-### 2c — Corral notebooks → `notebooks/`
-- [ ] `git mv diary_extraction.ipynb train_sample_visualize.ipynb notebooks/`
-- [ ] Fix the README Colab/GitHub link to `train_sample_visualize.ipynb`.
+### 2c — `notebooks/` (commit `b52124a`)
+- [x] `git mv` both root notebooks in
+- [x] README Colab links left intact (they point at the **upstream** repo)
 
-### 2d — Rename `data/` → `datasets/` (kills the name-clash; highest churn, last)
-- [ ] `git mv data datasets` (carries untracked `content/` along)
-- [ ] `data.py` — dataset-load path `…/data/{name}.json.zip` → `…/datasets/…`
-- [ ] `data/build_diarybank.py` → `datasets/build_diarybank.py`: `REPO/"data"` → `"datasets"`
-- [ ] `ocr/config.py` — `OCR_PDF_PATH` default `data/content/…` → `datasets/content/…`
-- [ ] `.gitignore` — `/data/…` patterns + 9 `!data/*.json.zip` allowlist → `datasets/`
-- [ ] `README.md`, `CLAUDE.md`, `ocr/README.md` — `data/` path refs → `datasets/`
-- [ ] Full `pytest` (the regression test loads `bigbank`/`easybank` from the dir).
+### 2d — `data/` → `datasets/` (commit `<this branch>`)
+- [x] `git mv` 13 tracked files; `datasets/` now holds the 9 zips + 3 scripts + html
+- [x] `data.py` loader path, `build_diarybank.py` output path (`os.path.join … "datasets"`)
+- [x] `ocr/experiments/*` bank loaders + `_segment_prototype` slug resolver
+- [x] `ocr/config.py` `OCR_PDF_PATH` default + all `ocr/` CLI-example docstrings
+- [x] `.gitignore` (`/datasets/…` + allowlist + `/datasets/content/`)
+- [x] CLAUDE.md + ocr/README.md updated; README upstream links left intact
+- [x] full `pytest` green
+
+## Decisions / honest notes
+- **README left mostly alone.** Its Colab/Dataset/`blob/main/…` links resolve
+  against the **upstream `greydanus/cursivetransformer`** repo; CLAUDE.md flags
+  the README as a historical, non-authoritative dev log. Rewriting those to the
+  local layout would 404. Only the one local `datasets/easybank.json.zip`
+  mention (smoke-train description) was updated.
+- **`test_document.pdf` stub.** A 92-byte stub that upstream's "Ponytail
+  cleanup" had deliberately removed got re-added by a `git add -A` in 2a. 2d
+  untracks it and `.gitignore`s `datasets/content/` so it can't recur. It lives
+  on, untracked, only as the OCR slug anchor (`config` treats it as usually-absent).
+- **`git add -A` is a footgun** here — `datasets/content/` (and other scratch)
+  is now explicitly ignored to make staging safe.
 
 ## Left intentionally alone
 - Flat training core + bare imports + `pythonpath=["."]`.
