@@ -37,16 +37,23 @@ import re
 OUTPUT_ROOT = os.environ.get("OCR_OUTPUT_ROOT", "outputs")
 
 
-def slugify(text: str, maxlen: int = 40) -> str:
+def slugify(text: str, maxlen: int | None = 40) -> str:
     """Filesystem-safe slug, preserving _ and - ('12/21/00' -> '12-21-00',
-    'test_document' -> 'test_document', '' -> 'untitled')."""
+    'test_document' -> 'test_document', '' -> 'untitled'). ``maxlen=None`` keeps
+    the full string (no truncation)."""
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", text).strip("-_")
-    return slug[:maxlen] or "untitled"
+    if maxlen is not None:
+        slug = slug[:maxlen]
+    return slug or "untitled"
 
 
 def pdf_slug(pdf_path: str) -> str:
-    """Slug derived from a PDF's filename stem."""
-    return slugify(os.path.splitext(os.path.basename(pdf_path))[0])
+    """Document slug = the PDF's full filename stem (NOT truncated).
+
+    This is both the per-document folder name and every filename prefix, so a
+    diary's page range stays visible (e.g. ``..._pages_10-16``) instead of being
+    chopped to a meaningless ``..._pag`` at 40 chars."""
+    return slugify(os.path.splitext(os.path.basename(pdf_path))[0], maxlen=None)
 
 
 def _pp(page: int) -> str:

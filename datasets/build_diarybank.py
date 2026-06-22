@@ -27,12 +27,13 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def author_label(diary_slug: str) -> str:
-    """Stable per-writer label from an output-dir slug.
+    """Stable per-writer label from a document-folder slug.
 
-    ``6-05-1962-black-diary-of-grace-galer_pag`` -> ``6-05-1962-black-diary-of-grace-galer``
-    (strip the truncated trailing ``_p...`` page-dir fragment).
+    ``6-05-1962-black-diary-of-grace-galer_pages_10-16`` ->
+    ``6-05-1962-black-diary-of-grace-galer`` (strip the trailing page-range so all
+    page ranges of one diary share a single writer label).
     """
-    return re.sub(r"_p[a-z]*$", "", diary_slug)
+    return re.sub(r"_(pages?|full)_[0-9].*$", "", diary_slug)
 
 
 def downsample_points(points: list[list[float]], target: int) -> list[list[float]]:

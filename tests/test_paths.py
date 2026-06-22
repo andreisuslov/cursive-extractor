@@ -14,6 +14,14 @@ def test_slugify():
 
 def test_slugify_maxlen():
     assert len(paths.slugify("x" * 100, maxlen=10)) == 10
+    assert paths.slugify("x" * 100, maxlen=None) == "x" * 100  # no truncation
+
+
+def test_pdf_slug_untruncated():
+    # The document folder/prefix keeps the full stem (page range stays visible),
+    # not chopped to 40 chars.
+    name = "6-05-1962-black-diary-of-grace-galer_pages_10-16"
+    assert paths.pdf_slug(f"outputs/{name}/{name}.pdf") == name
 
 
 def test_prefix():

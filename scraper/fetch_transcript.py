@@ -7,18 +7,30 @@ from the same diary's scans. About a third of diaries instead show "Coming soon!
 (no transcript yet); for those this writes nothing and reports it.
 
     python fetch_transcript.py --url <diary collection URL>
-    # -> outputs/<diary_slug>_transcript.txt   (whole-diary ground truth)
+    # -> outputs/<document>/transcript.txt   (whole-diary ground truth, beside its PDF)
 
 Pure ``requests`` (no browser): the transcript is in the page's server HTML.
 """
 
 import argparse
+import glob
 import html
 import os
 import re
 
 import requests
 from scrape_diary import OUTPUT_DIR, diary_slug
+
+
+def default_transcript_out(slug):
+    """Place the transcript inside this diary's document folder (beside its PDF).
+
+    The scraper makes ``outputs/<slug>_pages_X-Y/`` first, so prefer an existing
+    document folder for this diary; fall back to ``outputs/<slug>/`` if none yet.
+    """
+    docdirs = sorted(d for d in glob.glob(os.path.join(OUTPUT_DIR, slug + "*")) if os.path.isdir(d))
+    docdir = docdirs[0] if docdirs else os.path.join(OUTPUT_DIR, slug)
+    return os.path.join(docdir, "transcript.txt")
 
 
 def extract_transcript(page_html):
@@ -74,7 +86,7 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch a diary's ground-truth transcript")
     parser.add_argument("--url", help="Diary collection page URL")
     parser.add_argument(
-        "--out", default=None, help="Output .txt path (default: outputs/<slug>_transcript.txt)"
+        "--out", default=None, help="Output .txt path (default: outputs/<document>/transcript.txt)"
     )
     parser.add_argument(
         "--selftest", action="store_true", help="Run the offline self-check and exit"
@@ -91,7 +103,7 @@ def main():
     if not txt:
         print(f"No transcript available for {diary_slug(args.url)} (Coming soon / none).")
         return
-    out = args.out or os.path.join(OUTPUT_DIR, f"{diary_slug(args.url)}_transcript.txt")
+    out = args.out or default_transcript_out(diary_slug(args.url))
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with open(out, "w") as f:
         f.write(txt + "\n")

@@ -27,7 +27,7 @@ def _env_bool(name: str, default: bool = True) -> bool:
 # from there (no manual symlink needed). Override either via env.
 PDF_PATH = os.environ.get("OCR_PDF_PATH", "datasets/content/test_document.pdf")
 PDF_RENDER_FALLBACK = os.environ.get(
-    "OCR_PDF_RENDER_FALLBACK", "outputs/diary_partial_pages_1-4.pdf"
+    "OCR_PDF_RENDER_FALLBACK", "outputs/diary_partial_pages_1-4/diary_partial_pages_1-4.pdf"
 )
 
 # Output layout (root, per-PDF/per-page folders, filenames) lives in ocr/paths.py.

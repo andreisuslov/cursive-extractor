@@ -112,12 +112,18 @@ def create_pdf(image_folder, output_pdf):
 
 
 def build_output_path(slug, start, end, total):
-    """Name the PDF from the diary slug + the page range it actually covers."""
+    """Path for the assembled PDF, INSIDE its own per-document folder.
+
+    The document stem (diary slug + the page range it covers) names both the
+    folder and the PDF, so everything for this document -- PDF, transcript, and
+    the OCR pipeline's page_NNN/ folders -- lives together under one directory:
+    ``outputs/<stem>/<stem>.pdf``.
+    """
     if start == 1 and total and end >= total:
-        filename = f"{slug}_full_1-{total}.pdf"
+        stem = f"{slug}_full_1-{total}"
     else:
-        filename = f"{slug}_pages_{start}-{end}.pdf"
-    return os.path.join(OUTPUT_DIR, filename)
+        stem = f"{slug}_pages_{start}-{end}"
+    return os.path.join(OUTPUT_DIR, stem, f"{stem}.pdf")
 
 
 def main(url=DEFAULT_URL, start=1, pages=None):
@@ -139,8 +145,8 @@ def main(url=DEFAULT_URL, start=1, pages=None):
     if count <= 0:
         raise SystemExit(f"Empty range: start={start}, pages={pages}, total={total}")
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_pdf = build_output_path(slug, start, end, total)
+    os.makedirs(os.path.dirname(output_pdf), exist_ok=True)  # the per-document folder
     temp_folder = f"diary_images_{slug}"
     os.makedirs(temp_folder, exist_ok=True)
 
