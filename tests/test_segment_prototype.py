@@ -10,7 +10,7 @@ Pure-numpy logic only; no PDF render or cv2 trace needed.
 import cv2
 import numpy as np
 
-from ocr import _segment_prototype as sp
+from ocr.experiments import _segment_prototype as sp
 
 
 def test_expected_boundary_x_monotone_and_in_span():

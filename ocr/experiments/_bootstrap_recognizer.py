@@ -59,9 +59,10 @@ import numpy as np
 import torch
 from torch import nn
 
+from ocr import paths
+
 from . import _recognizer as R
 from . import _segment_prototype as sp
-from . import paths
 
 CNN_SIZE = 32  # slice canvas side fed to the CNN (px)
 MIN_CLASS = 6  # drop a letter class with fewer total slices than this (can't split it)

@@ -45,10 +45,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from ocr import paths, vectorize
+
 from . import _bootstrap_recognizer as B
 from . import _recognizer as R
 from . import _segment_prototype as sp
-from . import paths, vectorize
 
 # --- knobs ------------------------------------------------------------------
 MAX_VARIANTS = 5  # at most this many allograph forms per letter

@@ -12,8 +12,8 @@ import itertools
 import numpy as np
 import torch
 
-from ocr import _bootstrap_recognizer as B
-from ocr import _recognizer as R
+from ocr.experiments import _bootstrap_recognizer as B
+from ocr.experiments import _recognizer as R
 
 
 def _blob_mask(h=24, w=16) -> np.ndarray:

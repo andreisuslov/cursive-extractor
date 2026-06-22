@@ -7,7 +7,7 @@ data/*.json.zip banks, so it must run from the repo root.
 
 import numpy as np
 
-from ocr._order_recovery_experiment import run
+from ocr.experiments._order_recovery_experiment import run
 
 
 def _means(rows):

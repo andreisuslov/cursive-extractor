@@ -12,7 +12,7 @@ import itertools
 
 import numpy as np
 
-from ocr import _recognizer as r
+from ocr.experiments import _recognizer as r
 
 
 def _any_glyph(ch: str) -> np.ndarray:

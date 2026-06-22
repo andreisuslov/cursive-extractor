@@ -12,7 +12,7 @@ import itertools
 import numpy as np
 import torch
 
-from ocr import _htr_align as H
+from ocr.experiments import _htr_align as H
 
 
 def _region(h=20, w=120) -> np.ndarray:

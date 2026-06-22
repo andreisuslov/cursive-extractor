@@ -8,7 +8,7 @@ noise filter drops mislabeled slices, and that a built variant carries a medoid 
 
 import numpy as np
 
-from ocr import _allograph_library as A
+from ocr.experiments import _allograph_library as A
 
 
 def _two_blobs(seed=0, n=24, dim=576):

@@ -74,8 +74,8 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_path
 
-from . import paths, vectorize
-from .config import PDF_PATH, PDF_RENDER_FALLBACK
+from ocr import paths, vectorize
+from ocr.config import PDF_PATH, PDF_RENDER_FALLBACK
 
 # --- tunables (Step 3 cut-score weights + Step 5 DP) ------------------------
 W_THIN = 0.45  # thin ink column (a join between letters, not a stem)

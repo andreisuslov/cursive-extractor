@@ -50,9 +50,10 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from ocr import paths
+
 from . import _recognizer as R
 from . import _segment_prototype as sp
-from . import paths
 
 HTR_H = 32  # fixed input height (px) fed to the CNN
 WIDTH_DS = 4  # the CNN downsamples width by exactly 4 (two stride-2 width pools)

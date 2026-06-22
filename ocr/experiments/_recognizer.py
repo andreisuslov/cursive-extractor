@@ -51,8 +51,9 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from ocr import paths, vectorize
+
 from . import _segment_prototype as sp
-from . import paths, vectorize
 
 CHARS = string.ascii_lowercase + string.ascii_uppercase
 
