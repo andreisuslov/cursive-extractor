@@ -18,7 +18,6 @@ import os
 import re
 
 import requests
-
 from scrape_diary import OUTPUT_DIR, diary_slug
 
 
