@@ -324,6 +324,28 @@ def keep_target_components(
     return out
 
 
+def _grow_light_ink(
+    gray: np.ndarray, seed_binary: np.ndarray, weak_frac: float = 0.6
+) -> np.ndarray:
+    """Hysteresis mask: kept (strong) ink grown into connected light-pressure ink.
+
+    ``weak`` admits pixels darker than a cutoff set ``weak_frac`` of the way from
+    the Otsu ink threshold toward the paper level; only weak components touching a
+    strong seed pixel are kept, so faint stroke continuations are recovered without
+    pulling in isolated paper texture. A 1px dilate restores soft edges.
+    """
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    otsu_t, _ = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    bg = float(np.percentile(gray, 85))  # paper level
+    weak_t = otsu_t + weak_frac * max(0.0, bg - otsu_t)
+    weak = (blur < weak_t).astype(np.uint8)
+    seed = (seed_binary > 0).astype(np.uint8)
+    _n, labels = cv2.connectedComponents(cv2.bitwise_or(weak, seed), connectivity=8)
+    keep = set(np.unique(labels[seed > 0])) - {0}
+    out = np.isin(labels, list(keep)).astype(np.uint8)
+    return cv2.dilate(out, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+
+
 def clean_word(
     page_image: Image.Image,
     box_2d: list[int],
@@ -380,12 +402,13 @@ def clean_word(
         binary, gray = binary[ty0:ty1, tx0:tx1], gray[ty0:ty1, tx0:tx1]
         cb = (left + tx0, top + ty0, left + tx1, top + ty1)
 
-    # Paint the ORIGINAL grayscale over a slightly grown mask, so the kept word
-    # keeps its full stroke width and soft (anti-aliased) edges. Masking with the
-    # bare Otsu core (`binary`) alone drops every light edge pixel, leaving thin,
-    # broken, harsh letters. The thin `binary` is still returned for tracing.
-    grow = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    out_mask = cv2.dilate(binary, grow, iterations=2)
+    # Build the output mask by HYSTERESIS so light-pressure stroke parts survive:
+    # seed from the confident kept ink (`binary`), then grow into fainter pixels
+    # that are CONNECTED to it (low-pressure pen marks), while isolated faint
+    # paper-texture stays out. Masking with the bare Otsu core alone dropped every
+    # soft/low-pressure pixel, leaving thin, broken, harsh letters. The thin
+    # `binary` is still returned unchanged for tracing.
+    out_mask = _grow_light_ink(gray, binary)
     clean = np.full_like(gray, 255)
     clean[out_mask > 0] = gray[out_mask > 0]
     return Image.fromarray(clean), binary, cb
