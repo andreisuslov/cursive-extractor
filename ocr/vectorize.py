@@ -380,8 +380,14 @@ def clean_word(
         binary, gray = binary[ty0:ty1, tx0:tx1], gray[ty0:ty1, tx0:tx1]
         cb = (left + tx0, top + ty0, left + tx1, top + ty1)
 
+    # Paint the ORIGINAL grayscale over a slightly grown mask, so the kept word
+    # keeps its full stroke width and soft (anti-aliased) edges. Masking with the
+    # bare Otsu core (`binary`) alone drops every light edge pixel, leaving thin,
+    # broken, harsh letters. The thin `binary` is still returned for tracing.
+    grow = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    out_mask = cv2.dilate(binary, grow, iterations=2)
     clean = np.full_like(gray, 255)
-    clean[binary > 0] = gray[binary > 0]
+    clean[out_mask > 0] = gray[out_mask > 0]
     return Image.fromarray(clean), binary, cb
 
 
