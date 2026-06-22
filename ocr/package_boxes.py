@@ -17,7 +17,6 @@ import argparse
 import json
 import os
 
-import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -28,50 +27,48 @@ from .pdf_utils import crop_to_box, ensure_page_png, load_page
 TEAL = (0, 170, 160)
 
 
-def stroke_thickness_map(crop_image: Image.Image) -> np.ndarray:
-    """Per-pixel local stroke RADIUS (px) of the crop's ink: a distance transform.
-
-    Heavier pen pressure leaves a wider/darker line, so the distance from a stroke
-    point to the nearest non-ink pixel (its local radius) is a robust proxy for the
-    pressure applied at that point. ~0 off the ink.
-    """
-    gray = np.array(crop_image.convert("L"))
-    ink = (gray < 200).astype(np.uint8)  # clean crop is ink-on-white
-    if not ink.any():
-        return np.zeros(gray.shape, np.float32)
-    return cv2.distanceTransform(ink, cv2.DIST_L2, 3)
-
-
 def draw_vectorized(
     crop_image: Image.Image,
     points: list[list[float]],
     color: tuple[int, int, int] = TEAL,
-    max_width: int = 16,
+    min_width: int = 2,
+    max_width: int = 8,
 ) -> Image.Image:
     """Draw box-relative [x, y, pen] strokes onto an RGB copy of ``crop_image``,
     with each segment's width following the ORIGINAL pen pressure.
 
-    The drawn width tracks the local ink thickness (2x the distance-transform
-    radius under each point), so a light-pressure hairline is drawn thin and a
-    heavy down-stroke thick -- the strokes reproduce the strength of the writing
-    rather than a uniform 2px line. ``convert("RGB")`` so a grayscale (mode "L")
-    crop can take the colour.
+    Pressure is read as ink DARKNESS sampled along the skeleton (a 1-D measure
+    valid on strokes: a light-pressure hairline is pale, a heavy down-stroke is
+    saturated), normalized to this word's own ink and capped to ``[min_width,
+    max_width]``. Unlike a distance transform, darkness does NOT balloon at stroke
+    crossings or on solid blobs, so the rendered width tracks real pen pressure
+    rather than local ink solidity. ``convert("RGB")`` so a mode-"L" crop takes the
+    colour.
     """
     img = crop_image.convert("RGB")
     draw = ImageDraw.Draw(img)
     w, h = img.size
-    dist = stroke_thickness_map(crop_image)
+    gray = np.asarray(crop_image.convert("L"), dtype=np.float32)
 
-    def radius_at(x: float, y: float) -> float:
-        xi = min(w - 1, max(0, round(x)))
-        yi = min(h - 1, max(0, round(y)))
-        return float(dist[yi, xi])
+    def darkness_at(x: float, y: float) -> float:
+        xi, yi = min(w - 1, max(0, round(x))), min(h - 1, max(0, round(y)))
+        win = gray[max(0, yi - 1) : yi + 2, max(0, xi - 1) : xi + 2]
+        return 255.0 - float(win.min())  # darkest ink in a 3x3 nbhd around the point
 
     px = [(p[0] * w, p[1] * h, p[2]) for p in points]
+    dark = [darkness_at(x, y) for x, y, pen in px if pen == 1]
+    lo, hi = (
+        (float(np.percentile(dark, 20)), float(np.percentile(dark, 92))) if dark else (0.0, 1.0)
+    )
+    span = max(1.0, hi - lo)
+
+    def width_at(x: float, y: float) -> float:
+        t = min(1.0, max(0.0, (darkness_at(x, y) - lo) / span))
+        return min_width + t * (max_width - min_width)
+
     for i in range(1, len(px)):
         if px[i][2] == 1 and px[i - 1][2] == 1:  # both pen-down: connect
-            r = 0.5 * (radius_at(*px[i][:2]) + radius_at(*px[i - 1][:2]))
-            lw = max(1, min(max_width, round(2 * r)))  # ~ actual local ink width
+            lw = max(1, round(0.5 * (width_at(*px[i][:2]) + width_at(*px[i - 1][:2]))))
             draw.line([(px[i - 1][0], px[i - 1][1]), (px[i][0], px[i][1])], fill=color, width=lw)
     return img
 

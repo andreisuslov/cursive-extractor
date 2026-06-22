@@ -275,11 +275,16 @@ def format_strokes(
 
 
 def remove_ruled_lines(
-    binary: np.ndarray, span_frac: float = 0.8, max_thick: int = 4
+    binary: np.ndarray, span_frac: float = 0.8, max_thick: int = 25, min_aspect: float = 12.0
 ) -> np.ndarray:
-    """Remove TRUE ruled lines: thin, near-full-width horizontal runs that touch
-    both side edges of the crop. Word strokes (thick, undulating, not edge-to-edge
-    in a padded crop) are preserved."""
+    """Remove TRUE ruled lines: near-full-width, thin, high-aspect horizontal runs.
+
+    Identified after a full-width horizontal opening, so only ink that forms a long
+    straight horizontal run qualifies -- printed page rules do, cursive strokes do
+    not (they are not ``span_frac`` of the crop wide and survive the opening only as
+    fragments). We do NOT require the run to touch both crop edges: a padded word
+    crop leaves the rule starting a little inside, so the edge test let real rules
+    through. Aspect (``bw >= min_aspect*bh``) guards against wide ink blobs."""
     _h, w = binary.shape
     klen = max(20, int(span_frac * w))
     horiz = cv2.morphologyEx(
@@ -288,12 +293,13 @@ def remove_ruled_lines(
     n, labels, stats, _ = cv2.connectedComponentsWithStats((horiz > 0).astype(np.uint8), 8)
     line_mask = np.zeros_like(binary)
     for lbl in range(1, n):
-        x, _y, bw, bh, _ = stats[lbl]
-        if bh <= max_thick and bw >= span_frac * w and x <= 2 and x + bw >= w - 2:
+        _x, _y, bw, bh, _ = stats[lbl]
+        if bw >= span_frac * w and bh <= max_thick and bw >= min_aspect * bh:
             line_mask[labels == lbl] = 255
     if not line_mask.any():
         return binary
-    line_mask = cv2.dilate(line_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 5)))
+    # Grow the mask vertically to also clear the rule's anti-aliased scan halo.
+    line_mask = cv2.dilate(line_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 9)))
     cleaned = cv2.subtract(binary, cv2.bitwise_and(binary, line_mask))
     return cv2.morphologyEx(
         cleaned,
@@ -338,7 +344,11 @@ def _grow_light_ink(
     otsu_t, _ = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     bg = float(np.percentile(gray, 85))  # paper level
     weak_t = otsu_t + weak_frac * max(0.0, bg - otsu_t)
-    weak = (blur < weak_t).astype(np.uint8)
+    weak = (blur < weak_t).astype(np.uint8) * 255
+    # Strip ruled lines from the weak map too, else the connectivity grow below
+    # bridges the word into the page rule (faint scan-halo connects them) and the
+    # rule reappears in the cleaned crop even though it was cut from the seed.
+    weak = (remove_ruled_lines(weak) > 0).astype(np.uint8)
     seed = (seed_binary > 0).astype(np.uint8)
     _n, labels = cv2.connectedComponents(cv2.bitwise_or(weak, seed), connectivity=8)
     keep = set(np.unique(labels[seed > 0])) - {0}
