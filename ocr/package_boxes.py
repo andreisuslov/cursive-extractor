@@ -31,8 +31,9 @@ def draw_vectorized(
     crop_image: Image.Image,
     points: list[list[float]],
     color: tuple[int, int, int] = TEAL,
-    min_width: int = 2,
-    max_width: int = 8,
+    min_width: int = 1,
+    max_width: int = 14,
+    gamma: float = 0.7,
 ) -> Image.Image:
     """Draw box-relative [x, y, pen] strokes onto an RGB copy of ``crop_image``,
     with each segment's width following the ORIGINAL pen pressure.
@@ -63,7 +64,7 @@ def draw_vectorized(
     span = max(1.0, hi - lo)
 
     def width_at(x: float, y: float) -> float:
-        t = min(1.0, max(0.0, (darkness_at(x, y) - lo) / span))
+        t = min(1.0, max(0.0, (darkness_at(x, y) - lo) / span)) ** gamma  # spread the range
         return min_width + t * (max_width - min_width)
 
     for i in range(1, len(px)):

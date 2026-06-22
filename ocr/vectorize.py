@@ -221,6 +221,38 @@ def _noise_min_area(binary: np.ndarray, min_area: int) -> int:
     return max(min_area, round(0.75 * stroke_width * stroke_width))
 
 
+def _stroke_width(binary: np.ndarray) -> float:
+    """Median stroke width (px) of the ink, via the distance transform."""
+    ink = cv2.distanceTransform((binary > 0).astype(np.uint8), cv2.DIST_L2, 5)[binary > 0]
+    return 2.0 * float(np.median(ink)) if ink.size else 3.0
+
+
+def _chain_strokes(
+    strokes: list[list[tuple[int, int]]], bridge_gap: float
+) -> list[list[tuple[int, int]]]:
+    """Join consecutive (left-to-right) strokes into one continuous pen-down path
+    when the next stroke's nearer endpoint is within ``bridge_gap`` px of the
+    current path's tail. A scanned cursive word breaks into pieces (the binary
+    splits at thin/faint joins); chaining re-connects them in writing order so the
+    trace follows the hand's motion instead of fragmenting. Genuine pen-lifts
+    (i-dots, t-crosses, the next word) sit farther than ``bridge_gap`` and stay
+    separate strokes."""
+    if bridge_gap <= 0 or len(strokes) < 2:
+        return strokes
+    order = sorted(strokes, key=lambda s: min(p[0] for p in s))
+    g2 = bridge_gap * bridge_gap
+    chains = [list(order[0])]
+    for s in order[1:]:
+        tx, ty = chains[-1][-1]
+        (hx, hy), (ex, ey) = s[0], s[-1]
+        dh, de = (tx - hx) ** 2 + (ty - hy) ** 2, (tx - ex) ** 2 + (ty - ey) ** 2
+        if min(dh, de) <= g2:
+            chains[-1].extend(s if dh <= de else s[::-1])  # bridge: pen stays down
+        else:
+            chains.append(list(s))  # real pen-lift
+    return chains
+
+
 def trace_ink(binary: np.ndarray, min_area: int = 10) -> list[list[tuple[int, int]]]:
     """Trace a binary ink image into strokes. Pen-ups come from ink CONNECTED
     COMPONENTS (real pen-lifts: separate letters, i-dots, t-crosses), each traced
@@ -248,7 +280,7 @@ def trace_ink(binary: np.ndarray, min_area: int = 10) -> list[list[tuple[int, in
         for path in trace_component(skel, pts, nbrs, deg):
             strokes.append([(px + x, py + y) for px, py in path])
     strokes.sort(key=lambda s: min(p[0] for p in s))  # left-to-right reading order
-    return strokes
+    return _chain_strokes(strokes, bridge_gap=2.5 * _stroke_width(binary))
 
 
 def format_strokes(
@@ -275,37 +307,31 @@ def format_strokes(
 
 
 def remove_ruled_lines(
-    binary: np.ndarray, span_frac: float = 0.8, max_thick: int = 25, min_aspect: float = 12.0
+    binary: np.ndarray, frac: float = 0.55, max_band: int = 22, halo: int = 4
 ) -> np.ndarray:
-    """Remove TRUE ruled lines: near-full-width, thin, high-aspect horizontal runs.
+    """Remove printed ruled lines via a HORIZONTAL PROJECTION.
 
-    Identified after a full-width horizontal opening, so only ink that forms a long
-    straight horizontal run qualifies -- printed page rules do, cursive strokes do
-    not (they are not ``span_frac`` of the crop wide and survive the opening only as
-    fragments). We do NOT require the run to touch both crop edges: a padded word
-    crop leaves the rule starting a little inside, so the edge test let real rules
-    through. Aspect (``bw >= min_aspect*bh``) guards against wide ink blobs."""
-    _h, w = binary.shape
-    klen = max(20, int(span_frac * w))
-    horiz = cv2.morphologyEx(
-        binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (klen, 1))
-    )
-    n, labels, stats, _ = cv2.connectedComponentsWithStats((horiz > 0).astype(np.uint8), 8)
-    line_mask = np.zeros_like(binary)
-    for lbl in range(1, n):
-        _x, _y, bw, bh, _ = stats[lbl]
-        if bw >= span_frac * w and bh <= max_thick and bw >= min_aspect * bh:
-            line_mask[labels == lbl] = 255
-    if not line_mask.any():
+    A printed rule is a THIN band of rows that are mostly ink across the crop
+    width; cursive ink is sparse per row (thin strokes), so it never fills a row.
+    Detecting by row-fill fraction is robust to the small gaps a scanned rule
+    has -- unlike a morphological opening, which needs an unbroken full-width run
+    and so missed real (slightly broken) rules. Only THIN high-fill bands
+    (``<= max_band`` rows) are cleared, so the (sparser, taller) word body is kept;
+    a word sitting on the line loses only the few rows the rule occupies.
+    """
+    h, w = binary.shape
+    if w == 0:
         return binary
-    # Grow the mask vertically to also clear the rule's anti-aliased scan halo.
-    line_mask = cv2.dilate(line_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 9)))
-    cleaned = cv2.subtract(binary, cv2.bitwise_and(binary, line_mask))
-    return cv2.morphologyEx(
-        cleaned,
-        cv2.MORPH_CLOSE,  # reclose strokes a line cut
-        cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
-    )
+    rowfill = (binary > 0).sum(1).astype(np.float64) / w
+    is_rule = rowfill >= frac
+    if not is_rule.any():
+        return binary
+    out = binary.copy()
+    ys = np.where(is_rule)[0]
+    for band in np.split(ys, np.where(np.diff(ys) > 1)[0] + 1):  # contiguous row-bands
+        if len(band) <= max_band:  # thin -> a rule; a thick high-fill band is a blob/word
+            out[max(0, band[0] - halo) : min(h, band[-1] + 1 + halo), :] = 0
+    return out
 
 
 def keep_target_components(
