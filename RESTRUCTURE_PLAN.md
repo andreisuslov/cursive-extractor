@@ -42,9 +42,13 @@ python3 -m ruff check . && python3 -m ruff format --check . && python3 -m pytest
 - [x] `git mv scrape_diary.py fetch_transcript.py scraper/`; CLAUDE.md ref
 - [x] ruff import-group fix for the now-relocated `from scrape_diary import …`
 
-### 2c — `notebooks/` (commit `b52124a`)
+### 2c — `notebooks/` (commit `b52124a`), then removed (Python-only)
 - [x] `git mv` both root notebooks in
 - [x] README Colab links left intact (they point at the **upstream** repo)
+- [x] **Follow-up:** all 4 tracked notebooks deleted (the 2 here + the 2 upstream
+  ones in `static/`). The project moved entirely to Python — OCR lives in the
+  `ocr/` package, training/sampling in `scripts/`. Notebooks remain recoverable
+  from git history and the upstream repo. `notebooks/` dir removed.
 
 ### 2d — `data/` → `datasets/` (commit `<this branch>`)
 - [x] `git mv` 13 tracked files; `datasets/` now holds the 9 zips + 3 scripts + html
