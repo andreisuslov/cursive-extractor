@@ -357,7 +357,7 @@ def keep_target_components(
 
 
 def _grow_light_ink(
-    gray: np.ndarray, seed_binary: np.ndarray, weak_frac: float = 0.6
+    gray: np.ndarray, seed_binary: np.ndarray, weak_frac: float = 0.72
 ) -> np.ndarray:
     """Hysteresis mask: kept (strong) ink grown into connected light-pressure ink.
 
@@ -438,16 +438,16 @@ def clean_word(
         binary, gray = binary[ty0:ty1, tx0:tx1], gray[ty0:ty1, tx0:tx1]
         cb = (left + tx0, top + ty0, left + tx1, top + ty1)
 
-    # Build the output mask by HYSTERESIS so light-pressure stroke parts survive:
-    # seed from the confident kept ink (`binary`), then grow into fainter pixels
+    # Build the kept-ink mask by HYSTERESIS so light-pressure stroke parts survive:
+    # seed from the confident Otsu ink (`binary`), then grow into fainter pixels
     # that are CONNECTED to it (low-pressure pen marks), while isolated faint
-    # paper-texture stays out. Masking with the bare Otsu core alone dropped every
-    # soft/low-pressure pixel, leaving thin, broken, harsh letters. The thin
-    # `binary` is still returned unchanged for tracing.
+    # paper-texture stays out. The grown mask is returned for BOTH the output crop
+    # AND tracing -- so the skeleton/strokes cover the WHOLE letter (the light/gray
+    # pressed areas too), not just the dark Otsu core, and faint joins reconnect.
     out_mask = _grow_light_ink(gray, binary)
     clean = np.full_like(gray, 255)
     clean[out_mask > 0] = gray[out_mask > 0]
-    return Image.fromarray(clean), binary, cb
+    return Image.fromarray(clean), out_mask, cb
 
 
 def vectorize_pil_crop(pil_crop: Image.Image, contrast: float = 2.0) -> list[list[float]]:
