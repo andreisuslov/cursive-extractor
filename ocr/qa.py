@@ -4,7 +4,7 @@ per-box ``text_recognized.txt`` files (token for token, in box order).
 This catches missing boxes, extra boxes, and word/punctuation mismatches between
 the independent transcription pass and the boxed words.
 
-    python -m ocr.qa --pdf data/content/test_document.pdf --page 4
+    python -m ocr.qa --pdf datasets/content/test_document.pdf --page 4
 """
 
 import argparse

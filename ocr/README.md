@@ -25,7 +25,7 @@ export GOOGLE_API_KEY=...
 python -m ocr.extract_boxes --pdf "$PDF" --start-page 4 --end-page 4
 ```
 
-Run every command **from the repo root** so the default `data/content/...` paths
+Run every command **from the repo root** so the default `datasets/content/...` paths
 resolve, and so `python -m ocr.<module>` imports the package correctly.
 
 ## Output layout
@@ -141,7 +141,7 @@ box records which path was used in `metadata["cleaned"]`, and `package_boxes` cr
 Pass `--pdf` and `--page`; everything routes through the canonical layout above.
 
 ```bash
-PDF=data/content/test_document.pdf
+PDF=datasets/content/test_document.pdf
 
 # 1. Transcribe + detect boxes on page 4 (first run -> page_004; re-runs -> page_004_1, _2, ...)
 python -m ocr.extract_boxes --pdf "$PDF" --start-page 4 --end-page 4 --no-tool
@@ -180,7 +180,7 @@ python -m ocr._overlay_inspect
 
 ## Where the old scripts went
 
-The standalone `data/content/*.py` scripts were adapted into this package:
+The standalone `datasets/content/*.py` scripts were adapted into this package:
 
 | Old script | Now |
 |------------|-----|

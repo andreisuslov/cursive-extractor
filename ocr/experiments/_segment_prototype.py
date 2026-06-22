@@ -1437,10 +1437,10 @@ def _read_word(text_path: str, fallback: str) -> str:
 
 
 def _resolve_pdf(pdf: str) -> str:
-    """Accept a PDF path or a bare slug; map a slug to data/content/<slug>.pdf."""
+    """Accept a PDF path or a bare slug; map a slug to datasets/content/<slug>.pdf."""
     if os.path.exists(pdf):
         return pdf
-    cand = os.path.join("data", "content", f"{pdf}.pdf")
+    cand = os.path.join("datasets", "content", f"{pdf}.pdf")
     return cand if os.path.exists(cand) else pdf
 
 

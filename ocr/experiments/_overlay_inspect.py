@@ -67,7 +67,7 @@ def render_scan(pts, aspect, Hpx=240, pen=4):
 
 
 def from_bank(name, words):
-    with zipfile.ZipFile(f"data/{name}.json.zip") as z:
+    with zipfile.ZipFile(f"datasets/{name}.json.zip") as z:
         d = json.load(z.open(z.namelist()[0]))
     out = []
     for w in words:
@@ -78,7 +78,7 @@ def from_bank(name, words):
 
 
 def bank_diacritics(name, n=2):
-    with zipfile.ZipFile(f"data/{name}.json.zip") as z:
+    with zipfile.ZipFile(f"datasets/{name}.json.zip") as z:
         d = json.load(z.open(z.namelist()[0]))
     out = []
     for it in d:

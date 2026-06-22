@@ -15,9 +15,9 @@ connected-component count on 37/40 diacritic words. See _order_recovery_experime
 Two CLI modes:
   * batch  -- read a per-page boxes JSON, vectorize every word, write a dataset
               with {points, metadata} added to each entry:
-                python -m ocr.vectorize --boxes data/content/bbox_data/page_2_data.json --page 2
+                python -m ocr.vectorize --boxes datasets/content/bbox_data/page_2_data.json --page 2
   * single -- vectorize one cropped image file and (optionally) save an overlay:
-                python -m ocr.vectorize --image data/content/temp_crop.jpg --save overlay.jpg
+                python -m ocr.vectorize --image datasets/content/temp_crop.jpg --save overlay.jpg
 """
 
 import argparse

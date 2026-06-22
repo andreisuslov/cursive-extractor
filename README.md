@@ -49,7 +49,7 @@ python3 -m ruff format         # auto-format the code
 python3 scripts/smoke_train.py
 ```
 
-`scripts/smoke_train.py` auto-selects the device (CUDA → MPS → CPU), loads a tiny subset of `data/easybank.json.zip`, runs a handful of real training steps (loss should decrease), and generates one sample via `sample.py` — finishing in a few seconds. It sets `WANDB_MODE=disabled`, so nothing is logged or uploaded.
+`scripts/smoke_train.py` auto-selects the device (CUDA → MPS → CPU), loads a tiny subset of `datasets/easybank.json.zip`, runs a handful of real training steps (loss should decrease), and generates one sample via `sample.py` — finishing in a few seconds. It sets `WANDB_MODE=disabled`, so nothing is logged or uploaded.
 
 To run the real `train.py` locally, point it at a device and disable W&B the same way (`n_embd_context` must equal `n_embd`):
 

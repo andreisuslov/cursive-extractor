@@ -22,9 +22,9 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def load_and_parse_data(dataset_name: str) -> list:
-    """Load ``data/<dataset_name>.json.zip`` and normalize each item's points (apply
+    """Load ``datasets/<dataset_name>.json.zip`` and normalize each item's points (apply
     aspect ratio, shift x to start at 0, recenter y)."""
-    file_path = f"{CURRENT_DIR}/data/{dataset_name}.json.zip"
+    file_path = f"{CURRENT_DIR}/datasets/{dataset_name}.json.zip"
     print(f"Trying to load dataset file from {file_path}")
 
     with zipfile.ZipFile(file_path, "r") as zip_ref:

@@ -2,7 +2,7 @@
 
 Every value can be overridden by an environment variable, and the CLI entry
 points expose the commonly-changed ones as flags. Paths default to the sample
-document that already lives in ``data/content/``.
+document that already lives in ``datasets/content/``.
 """
 
 import os
@@ -25,7 +25,7 @@ def _env_bool(name: str, default: bool = True) -> bool:
 # is git-ignored and usually absent. The real, renderable diary PDF lives in
 # ``outputs/`` -- PDF_RENDER_FALLBACK points at it so a missing slug PDF renders
 # from there (no manual symlink needed). Override either via env.
-PDF_PATH = os.environ.get("OCR_PDF_PATH", "data/content/test_document.pdf")
+PDF_PATH = os.environ.get("OCR_PDF_PATH", "datasets/content/test_document.pdf")
 PDF_RENDER_FALLBACK = os.environ.get(
     "OCR_PDF_RENDER_FALLBACK", "outputs/diary_partial_pages_1-4.pdf"
 )

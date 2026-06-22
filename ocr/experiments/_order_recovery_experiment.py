@@ -29,9 +29,9 @@ SAVE_SAMPLES = [0, 5, 12, 25]  # indices to save side-by-side images
 
 @cache
 def _load_bank(name):
-    """Parse a data/<name>.json.zip bank once (read-only; cached so a bank used by
+    """Parse a datasets/<name>.json.zip bank once (read-only; cached so a bank used by
     both run() and the sample-saving epilogue is decoded a single time)."""
-    with zipfile.ZipFile(f"data/{name}.json.zip") as z:
+    with zipfile.ZipFile(f"datasets/{name}.json.zip") as z:
         return json.load(z.open(z.namelist()[0]))
 
 

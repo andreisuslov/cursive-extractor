@@ -2,7 +2,7 @@
 
 Runs the real easybank/bigbank vectorization (a few seconds) and asserts the
 recovered pen-up and IoU means stay at their committed values. Depends on the
-data/*.json.zip banks, so it must run from the repo root.
+datasets/*.json.zip banks, so it must run from the repo root.
 """
 
 import numpy as np

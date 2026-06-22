@@ -10,7 +10,7 @@ For each word box on a page it creates a folder
 Reads the canonical strokes dataset (so run ``ocr.vectorize`` first) plus the
 PDF. Defaults to the latest version of the page.
 
-    python -m ocr.package_boxes --pdf data/content/test_document.pdf --page 4
+    python -m ocr.package_boxes --pdf datasets/content/test_document.pdf --page 4
 """
 
 import argparse

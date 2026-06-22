@@ -4,7 +4,7 @@ For the full per-box deliverable (every box in its own folder with text + crop +
 vectorized overlay) use ``ocr.package_boxes``. This is a lightweight helper to
 pull one box straight from a boxes JSON, without needing a vectorize pass.
 
-    python -m ocr.crop --pdf data/content/test_document.pdf --page 4 --index 0
+    python -m ocr.crop --pdf datasets/content/test_document.pdf --page 4 --index 0
 """
 
 import argparse

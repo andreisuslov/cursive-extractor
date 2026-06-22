@@ -12,7 +12,8 @@ Handles the two coordinate conventions produced by this pipeline:
 Other options: ``--index`` to draw a single entry, ``--crop`` to crop the output
 to the drawn strokes (handy with ``--index``), ``--save`` / ``--show``.
 
-    python -m ocr.verify_dataset --dataset data/content/handwriting_dataset_precise.json --page 2
+    python -m ocr.verify_dataset \\
+        --dataset datasets/content/handwriting_dataset_precise.json --page 2
     python -m ocr.verify_dataset --coords box --page 4 --save overlay.jpg
 """
 

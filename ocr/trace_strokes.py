@@ -5,7 +5,8 @@ resulting JSON, and writes a green overlay for inspection. This is the
 model-based alternative to ``python -m ocr.vectorize``.
 
     export GOOGLE_API_KEY=...
-    python -m ocr.trace_strokes --boxes data/content/bbox_data/page_2_data.json --index 0 --page 2
+    python -m ocr.trace_strokes \\
+        --boxes datasets/content/bbox_data/page_2_data.json --index 0 --page 2
 """
 
 import argparse

@@ -19,5 +19,5 @@ Modules:
     visualize_words  - CLI: draw the bounding boxes of the first N words of a page
 
 Refactored out of the Colab notebook ``cursive_ocr_extraction.ipynb`` and the
-standalone ``data/content/*.py`` scripts.
+standalone ``datasets/content/*.py`` scripts.
 """

@@ -4,8 +4,8 @@ Reads a per-page JSON produced by ``extract_boxes`` (entries of
 ``{text, box_2d}`` with ``box_2d`` = [ymin, xmin, ymax, xmax] on a 0-1000
 scale) and draws each box, labeled with its word, over the rendered page.
 
-    python -m ocr.visualize_words --pdf data/content/test_document.pdf \\
-        --boxes data/content/bbox_data/page_2_data.json --page 2 --num 3
+    python -m ocr.visualize_words --pdf datasets/content/test_document.pdf \\
+        --boxes datasets/content/bbox_data/page_2_data.json --page 2 --num 3
 
 NOTE: this replaces the notebook's "View Sample Words" cell, which referenced
 undefined globals and a different schema; it now reads the pipeline's own output.

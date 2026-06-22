@@ -7,7 +7,7 @@ For each page in the requested range it:
 
 Run from the repo root:
     export GOOGLE_API_KEY=...your key...
-    python -m ocr.extract_boxes --pdf data/content/test_document.pdf --start-page 1 --end-page 3
+    python -m ocr.extract_boxes --pdf datasets/content/test_document.pdf --start-page 1 --end-page 3
 """
 
 import argparse

@@ -1,17 +1,17 @@
 """Assemble OCR'd diary pages into one multi-writer training dataset.
 
 Walks every vectorized word box (the latest-version ``*_strokes.json`` under
-``outputs/<diary>/page_*/``) into a single ``data/<name>.json.zip`` in the exact
+``outputs/<diary>/page_*/``) into a single ``datasets/<name>.json.zip`` in the exact
 ``{points, metadata}`` schema the hand-collected banks use, tagging each entry's
 ``metadata.author`` with the diary it came from -- so the corpus is genuinely
 multi-writer rather than one "robot" author. Degenerate boxes (empty/near-empty
 strokes) are dropped.
 
-    python3 data/build_diarybank.py --name diarybank
-    # -> data/diarybank.json.zip   (+ per-diary counts)
+    python3 datasets/build_diarybank.py --name diarybank
+    # -> datasets/diarybank.json.zip   (+ per-diary counts)
 
-Remember to allowlist the result in .gitignore (``!data/<name>.json.zip``) before
-committing -- ``data/*.zip`` is ignored by default.
+Remember to allowlist the result in .gitignore (``!datasets/<name>.json.zip``) before
+committing -- ``datasets/*.zip`` is ignored by default.
 """
 
 import argparse
@@ -172,7 +172,7 @@ def latest_strokes(output_root: str) -> list[str]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--name", default="diarybank", help="dataset name -> data/<name>.json.zip")
+    ap.add_argument("--name", default="diarybank", help="dataset name -> datasets/<name>.json.zip")
     ap.add_argument("--output-root", default=os.path.join(REPO, "outputs"))
     ap.add_argument("--min-points", type=int, default=8, help="drop boxes with fewer points")
     ap.add_argument(
@@ -241,7 +241,7 @@ def main() -> None:
     if not entries:
         raise SystemExit("No usable strokes found -- has anything been vectorized yet?")
 
-    out_json = os.path.join(REPO, "data", f"{args.name}.json")
+    out_json = os.path.join(REPO, "datasets", f"{args.name}.json")
     with open(out_json, "w") as f:
         json.dump(entries, f)
     out_zip = out_json + ".zip"

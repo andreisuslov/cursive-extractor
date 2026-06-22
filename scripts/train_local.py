@@ -54,7 +54,7 @@ def pick_device() -> str:
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Real local training (MPS/CPU, W&B disabled)")
     p.add_argument("--steps", type=int, default=3000, help="Training steps")
-    p.add_argument("--dataset", default="easybank", help="Dataset name under data/")
+    p.add_argument("--dataset", default="easybank", help="Dataset name under datasets/")
     p.add_argument("--num_words", type=int, default=2, help="Words per training example")
     p.add_argument("--batch_size", type=int, default=24)
     p.add_argument("--n_layer", type=int, default=4)
