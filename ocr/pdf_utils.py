@@ -5,10 +5,44 @@ OCR boxes are ``box_2d = [ymin, xmin, ymax, xmax]`` normalized to a 0-1000 scale
 padding must be used when overlaying box-relative points back onto a page.
 """
 
+import os
+
 import cv2
 import numpy as np
 from pdf2image import convert_from_path
 from PIL import Image
+
+from . import paths
+
+
+def save_page_png(image: Image.Image, out_path: str, max_px: int = 2400) -> str:
+    """Save a viewable PNG of a page image to ``out_path`` (downscaled if huge)."""
+    img = image.convert("RGB")
+    if max(img.size) > max_px:
+        img = img.copy()
+        img.thumbnail((max_px, max_px))
+    paths.ensure_parent(out_path)
+    img.save(out_path)
+    return out_path
+
+
+def ensure_page_png(
+    pdf_path: str,
+    page: int,
+    version: int | None = None,
+    root: str | None = None,
+    dpi: int = 200,
+    max_px: int = 2400,
+) -> str:
+    """Ensure the page folder holds a PNG of the input page (idempotent).
+
+    Renders the page only if the file isn't there yet, so any stage that touches a
+    page (extract/vectorize/package) leaves a viewable input-page image behind.
+    """
+    out = paths.page_image(pdf_path, page, version, root)
+    if os.path.exists(out):
+        return out
+    return save_page_png(load_page(pdf_path, page - 1, dpi=dpi), out, max_px=max_px)
 
 
 def load_pages(pdf_path: str, dpi: int | None = None) -> list[Image.Image]:

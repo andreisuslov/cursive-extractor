@@ -31,6 +31,11 @@ def test_prefix():
     assert paths.prefix("a/test_document.pdf", 4, 0) == "test_document_p004"
 
 
+def test_page_image_path():
+    pdf = "x/doc.pdf"
+    assert paths.page_image(pdf, 4, None, "outputs") == "outputs/doc/page_004/doc_p004_page.png"
+
+
 def test_page_file_and_builders():
     pdf = "x/doc.pdf"
     assert paths.boxes_json(pdf, 4, None, "outputs") == "outputs/doc/page_004/doc_p004_boxes.json"

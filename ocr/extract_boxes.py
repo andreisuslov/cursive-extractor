@@ -19,6 +19,7 @@ from pdf2image import convert_from_path
 
 from . import config, paths, reconcile
 from .gemini_ocr import build_model, draw_boxes_on_image, extract_with_fallback, transcribe_page
+from .pdf_utils import save_page_png
 from .tool import render_tool
 
 
@@ -96,6 +97,7 @@ def main(argv: list[str] | None = None) -> None:
             if args.version is not None
             else paths.next_version(args.pdf, page_num, root)
         )
+        save_page_png(page_image, paths.page_image(args.pdf, page_num, version, root))
         try:
             # 1. Full-page transcription (for the QA cross-check) + counts
             transcript = transcribe_page(text_model, page_image)

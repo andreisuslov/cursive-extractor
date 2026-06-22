@@ -28,7 +28,7 @@ import numpy as np
 from PIL import Image, ImageEnhance
 
 from . import config, paths
-from .pdf_utils import box_to_crop_box, crop_to_box, load_page
+from .pdf_utils import box_to_crop_box, crop_to_box, ensure_page_png, load_page
 
 
 def preprocess(gray: np.ndarray) -> np.ndarray:
@@ -543,6 +543,7 @@ def main(argv: list[str] | None = None) -> None:
     if version is None and not args.boxes:
         raise SystemExit("No processed version found; run ocr.extract_boxes first or pass --boxes.")
 
+    ensure_page_png(args.pdf, args.page, version, root)  # leave a viewable input page
     boxes_path = args.boxes or paths.boxes_json(args.pdf, args.page, version, root)
     with open(boxes_path) as f:
         boxes = json.load(f)

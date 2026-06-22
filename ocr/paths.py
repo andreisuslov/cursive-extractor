@@ -18,6 +18,7 @@ Layout::
       <pdf_slug>/
         <pdf_slug>_tool.html                          # capture tool (spans a run)
         page_<NNN>[_V]/
+          <pdf_slug>_p<NNN>[_V]_page.png              # the rendered input page
           <pdf_slug>_p<NNN>[_V]_boxes.json            # detected words + box_2d
           <pdf_slug>_p<NNN>[_V]_boxes_overlay.jpg     # page with boxes drawn
           <pdf_slug>_p<NNN>[_V]_strokes.json          # vectorized {points, metadata}
@@ -133,6 +134,13 @@ def _page_file(pdf_path: str, page: int, version: int | None, root: str | None, 
         page_dir(pdf_path, page, version, root),
         f"{prefix(pdf_path, page, version)}_{suffix}",
     )
+
+
+def page_image(
+    pdf_path: str, page: int, version: int | None = None, root: str | None = None
+) -> str:
+    """The rendered input page, saved into the page folder for reference."""
+    return _page_file(pdf_path, page, version, root, "page.png")
 
 
 def boxes_json(

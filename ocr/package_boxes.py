@@ -20,7 +20,7 @@ import os
 from PIL import Image, ImageDraw
 
 from . import config, paths, qa
-from .pdf_utils import crop_to_box, load_page
+from .pdf_utils import crop_to_box, ensure_page_png, load_page
 
 # Teal strokes overlaid on the cursive, matching the verification colour.
 TEAL = (0, 170, 160)
@@ -142,6 +142,7 @@ def main(argv: list[str] | None = None) -> None:
     if version is None and not args.strokes:
         raise SystemExit("No processed version found; run ocr.vectorize first or pass --strokes.")
 
+    ensure_page_png(args.pdf, args.page, version, root)  # leave a viewable input page
     strokes_path = args.strokes or paths.strokes_json(args.pdf, args.page, version, root)
     with open(strokes_path) as f:
         data = json.load(f)
