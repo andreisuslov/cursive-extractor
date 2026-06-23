@@ -134,10 +134,13 @@ def package_boxes(
         # respect the per-word gate decision from vectorize (metadata["cleaned"])
         # so box.jpg matches the crop the strokes were normalized to.
         use_clean = clean and entry.get("metadata", {}).get("cleaned", True)
+        poly = entry.get("polygon")
         if use_clean:
-            crop, _, _ = clean_word(page_image, entry["box_2d"], padding, pad_frac)
+            crop, _, _ = clean_word(page_image, entry["box_2d"], padding, pad_frac, polygon=poly)
         else:
-            crop, _ = crop_to_box(page_image, entry["box_2d"], padding, pad_frac, fit_ink)
+            crop, _ = crop_to_box(
+                page_image, entry["box_2d"], padding, pad_frac, fit_ink, polygon=poly
+            )
 
         with open(os.path.join(bdir, paths.BOX_TEXT_FILE), "w") as f:
             f.write(entry.get("text", ""))

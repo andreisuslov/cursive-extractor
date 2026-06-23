@@ -28,7 +28,13 @@ import numpy as np
 from PIL import Image, ImageEnhance
 
 from . import config, paths
-from .pdf_utils import box_to_crop_box, crop_to_box, ensure_page_png, load_page
+from .pdf_utils import (
+    box_to_crop_box,
+    crop_to_box,
+    ensure_page_png,
+    load_page,
+    whiten_outside_polygon,
+)
 
 
 def preprocess(gray: np.ndarray) -> np.ndarray:
@@ -389,6 +395,7 @@ def clean_word(
     pad_frac: float | None = None,
     tighten: bool = True,
     margin: int = 6,
+    polygon: list | None = None,
 ) -> tuple[Image.Image, np.ndarray, tuple[int, int, int, int]]:
     """Crop a word, strip ruled lines / scan bands / neighbours, optionally tighten
     to the kept ink. Returns ``(clean_gray_PIL, clean_binary, crop_box)``.
@@ -408,6 +415,8 @@ def clean_word(
     left, top, _right, _bottom = cb
 
     gray = np.array(page_image.crop(cb).convert("L"))
+    if polygon:  # hand-drawn outline: erase everything outside it (rules, neighbours)
+        gray = whiten_outside_polygon(gray, polygon, page_image.size, left, top)
     binary = remove_ruled_lines(preprocess(gray))
     sx, sy = wpx / 1000.0, hpx / 1000.0
     rx0, ry0 = box_2d[1] * sx - left, box_2d[0] * sy - top
@@ -517,11 +526,12 @@ def vectorize_boxes(
     for entry in boxes if limit is None else boxes[:limit]:
         if "box_2d" not in entry:
             continue
-        crop, _ = crop_to_box(page, entry["box_2d"], padding, pad_frac, fit_ink)
+        poly = entry.get("polygon")
+        crop, _ = crop_to_box(page, entry["box_2d"], padding, pad_frac, fit_ink, polygon=poly)
         raw_points = vectorize_pil_crop(crop)
         used_clean = False
         if clean:
-            _, binary, _ = clean_word(page, entry["box_2d"], padding, pad_frac)
+            _, binary, _ = clean_word(page, entry["box_2d"], padding, pad_frac, polygon=poly)
             ch, cw = binary.shape
             clean_points = format_strokes(trace_ink(binary), cw, ch)
             # gate: keep cleaning only if it doesn't increase the stroke count

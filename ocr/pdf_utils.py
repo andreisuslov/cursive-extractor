@@ -163,22 +163,52 @@ def fit_crop_to_ink(
     return (max(0, L + xs0 - mx), max(0, T + ys0 - my), min(W, L + xs1 + mx), min(H, T + ys1 + my))
 
 
+def whiten_outside_polygon(
+    gray: np.ndarray, polygon: list, page_size: tuple[int, int], left: int, top: int
+) -> np.ndarray:
+    """Set every pixel OUTSIDE ``polygon`` to white (255), in-place-ish on ``gray``.
+
+    ``polygon`` is a list of [x, y] vertices in 0-1000 page coordinates (as the box
+    editor saves them); ``left``/``top`` are the crop's offset on the page. Used to
+    isolate a hand-outlined word from a too-wide box -- ink outside the polygon
+    (ruled lines, neighbours) is erased before tracing.
+    """
+    h, w = gray.shape[:2]
+    wpx, hpx = page_size
+    pts = np.array(
+        [[round(x / 1000 * wpx - left), round(y / 1000 * hpx - top)] for x, y in polygon],
+        dtype=np.int32,
+    )
+    mask = np.zeros((h, w), np.uint8)
+    cv2.fillPoly(mask, [pts], 255)
+    gray[mask == 0] = 255
+    return gray
+
+
 def crop_to_box(
     page_image: Image.Image,
     box_2d: list[int],
     padding: int = 10,
     pad_frac: float = 0.0,
     fit_ink: bool = False,
+    polygon: list | None = None,
 ) -> tuple[Image.Image, tuple[int, int, int, int]]:
     """Crop ``page_image`` to ``box_2d``. Returns ``(crop, (left,top,right,bottom))``.
 
     With ``fit_ink=True`` the crop is fitted to the word's own ink components so
     no letter strokes are clipped and neighbours are excluded (see
-    ``fit_crop_to_ink``).
+    ``fit_crop_to_ink``). With ``polygon`` (0-1000 page coords) the crop's ink
+    outside that hand-drawn outline is whitened, isolating an irregular word.
     """
     if fit_ink:
         crop_box = fit_crop_to_ink(page_image, box_2d, padding, pad_frac)
     else:
         width, height = page_image.size
         crop_box = box_to_crop_box(box_2d, width, height, padding, pad_frac)
-    return page_image.crop(crop_box), crop_box
+    crop = page_image.crop(crop_box)
+    if polygon:
+        arr = whiten_outside_polygon(
+            np.array(crop.convert("L")), polygon, page_image.size, crop_box[0], crop_box[1]
+        )
+        crop = Image.fromarray(arr)
+    return crop, crop_box
