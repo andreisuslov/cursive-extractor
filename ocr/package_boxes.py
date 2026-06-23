@@ -46,19 +46,23 @@ def draw_vectorized(
     gamma: float = 1.6,
     smooth: int = 11,
     path_smooth: int = 7,
+    background: str = "crop",
 ) -> Image.Image:
-    """Draw box-relative [x, y, pen] strokes onto an RGB copy of ``crop_image``,
-    with stroke width following the ORIGINAL pen pressure.
+    """Draw box-relative [x, y, pen] strokes as a smoothed pen-pressure brush-tube.
 
-    Pressure is read as ink DARKNESS sampled along the skeleton (a 1-D measure
-    valid on strokes: a light hairline is pale, a heavy down-stroke saturated),
-    normalized to this word's own ink, ``gamma``>1 so dark/heavy ink stays thick
-    while light ink renders thin, capped to ``[min_width, max_width]``. The width
-    series is SMOOTHED along each stroke (``smooth`` points) so fat<->thin
-    transitions are gradual, and each stroke is rendered as overlapping discs (a
-    brush tube) rather than jointed line segments -- no beads, gaps, or dotting.
+    Width follows ink DARKNESS sampled along the skeleton (light hairline -> thin,
+    heavy down-stroke -> thick; ``gamma``>1 prioritizes dark), smoothed along the
+    stroke for gradual transitions, rendered as overlapping discs (no beads/gaps).
+    ``background``: ``"crop"`` overlays the strokes on the crop (debug),
+    ``"white"`` draws teal on white, ``"transparent"`` draws teal on an RGBA
+    transparent canvas (the teal-only image).
     """
-    img = crop_image.convert("RGB")
+    if background == "transparent":
+        img = Image.new("RGBA", crop_image.size, (0, 0, 0, 0))
+    elif background == "white":
+        img = Image.new("RGB", crop_image.size, (255, 255, 255))
+    else:
+        img = crop_image.convert("RGB")
     draw = ImageDraw.Draw(img)
     w, h = img.size
     gray = np.asarray(crop_image.convert("L"), dtype=np.float32)
@@ -138,9 +142,10 @@ def package_boxes(
         with open(os.path.join(bdir, paths.BOX_TEXT_FILE), "w") as f:
             f.write(entry.get("text", ""))
         crop.save(os.path.join(bdir, paths.BOX_IMAGE_FILE), quality=95, subsampling=0)
-        draw_vectorized(crop, entry.get("points", [])).save(
-            os.path.join(bdir, paths.BOX_VECTORIZED_FILE)
-        )
+        pts = entry.get("points", [])
+        draw_vectorized(crop, pts).save(os.path.join(bdir, paths.BOX_VECTORIZED_FILE))
+        # teal-only image (transparent PNG): just the strokes, for review/cleanup
+        draw_vectorized(crop, pts, background="transparent").save(os.path.join(bdir, "teal.png"))
 
         made += 1
         if made % 10 == 0:

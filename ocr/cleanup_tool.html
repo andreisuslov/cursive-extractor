@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stroke Cleanup Tool — cursivetransformer</title>
+<style>
+  :root { --bg:#1b1f24; --panel:#252b32; --ink:#e6edf3; --muted:#9fb0c0; --teal:#00aaa0; --line:#39424d; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:13px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:8px 12px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:14px; margin:0 0 6px; font-weight:600; }
+  .bar { display:flex; flex-wrap:wrap; gap:14px 18px; align-items:center; }
+  .grp { display:flex; gap:8px; align-items:center; }
+  .grp label { color:var(--muted); white-space:nowrap; }
+  button { background:#30373f; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px 10px; cursor:pointer; }
+  button:hover { background:#3a424c; }
+  button.on { background:var(--teal); border-color:var(--teal); color:#04201e; font-weight:600; }
+  input[type=range] { width:120px; }
+  input[type=color] { width:30px; height:26px; padding:0; border:1px solid var(--line); border-radius:4px; background:none; }
+  #stagewrap { padding:16px; overflow:auto; height:calc(100vh - 120px); }
+  #stage { position:relative; margin:0 auto; box-shadow:0 0 0 1px var(--line); background:
+      conic-gradient(#2c333b 25%, #232a31 0 50%, #2c333b 0 75%, #232a31 0) 0 0/22px 22px; }
+  #stage img, #stage canvas { position:absolute; left:0; top:0; width:100%; height:100%; image-rendering:auto; }
+  #paint { cursor:crosshair; touch-action:none; }
+  .hint { color:var(--muted); padding:6px 12px; border-top:1px solid var(--line); background:var(--panel); }
+  .pill { font-size:11px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Stroke Cleanup Tool <span class="pill">— paint the strokes the way the hand wrote them; export to tune the tracer</span></h1>
+  <div class="bar">
+    <div class="grp">
+      <label>Reference (crop)</label><input type="file" id="refFile" accept="image/*" />
+      <label>opacity</label><input type="range" id="refOp" min="0" max="100" value="60" />
+    </div>
+    <div class="grp">
+      <label>Overlay (teal)</label><input type="file" id="ovFile" accept="image/*" />
+      <label>opacity</label><input type="range" id="ovOp" min="0" max="100" value="35" />
+    </div>
+    <div class="grp">
+      <button id="brushBtn" class="on">Brush</button>
+      <button id="eraseBtn">Eraser</button>
+      <label>size</label><input type="range" id="size" min="1" max="40" value="6" /><span id="sizeV" class="pill">6</span>
+      <input type="color" id="color" value="#00aaa0" />
+    </div>
+    <div class="grp">
+      <label>zoom</label><input type="range" id="zoom" min="20" max="300" value="100" /><span id="zoomV" class="pill">100%</span>
+    </div>
+    <div class="grp">
+      <button id="undo">Undo</button><button id="redo">Redo</button><button id="clear">Clear</button>
+    </div>
+    <div class="grp">
+      <button id="expPng">Export PNG</button><button id="expJson">Export JSON</button>
+    </div>
+  </div>
+</header>
+
+<div id="stagewrap">
+  <div id="stage">
+    <img id="ref" alt="" />
+    <img id="overlay" alt="" />
+    <canvas id="paint"></canvas>
+  </div>
+</div>
+<div class="hint" id="hint">Load a <b>Reference (crop)</b> image to begin. Paint over the strokes; Undo = ⌘/Ctrl-Z. Export JSON gives normalized stroke paths.</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const stage = $('stage'), refImg = $('ref'), ovImg = $('overlay'), cv = $('paint'), ctx = cv.getContext('2d');
+let W = 0, H = 0, scale = 1;
+let tool = 'brush', drawing = false, cur = null;
+const strokes = [];   // {color,size,erase,pts:[[x,y],...]}  coords in image px
+const redo = [];
+
+function loadInto(file, imgEl, after){
+  if(!file) return;
+  const url = URL.createObjectURL(file);
+  imgEl.onload = () => { if(after) after(imgEl); URL.revokeObjectURL(url); };
+  imgEl.src = url;
+}
+$('refFile').onchange = e => loadInto(e.target.files[0], refImg, img => {
+  W = img.naturalWidth; H = img.naturalHeight;
+  cv.width = W; cv.height = H;
+  applyZoom();
+  strokes.length = 0; redo.length = 0; redraw();
+  $('hint').innerHTML = `Canvas ${W}×${H}px. Paint the strokes; Undo = ⌘/Ctrl-Z.`;
+});
+$('ovFile').onchange = e => loadInto(e.target.files[0], ovImg);
+
+function applyZoom(){
+  scale = (+$('zoom').value)/100;
+  stage.style.width = (W*scale)+'px'; stage.style.height = (H*scale)+'px';
+  $('zoomV').textContent = Math.round(scale*100)+'%';
+}
+$('zoom').oninput = applyZoom;
+$('refOp').oninput = () => refImg.style.opacity = $('refOp').value/100;
+$('ovOp').oninput  = () => ovImg.style.opacity  = $('ovOp').value/100;
+refImg.style.opacity = .6; ovImg.style.opacity = .35;
+$('size').oninput = () => $('sizeV').textContent = $('size').value;
+
+$('brushBtn').onclick = () => { tool='brush'; $('brushBtn').classList.add('on'); $('eraseBtn').classList.remove('on'); };
+$('eraseBtn').onclick = () => { tool='erase'; $('eraseBtn').classList.add('on'); $('brushBtn').classList.remove('on'); };
+
+function pos(e){
+  const r = cv.getBoundingClientRect();
+  return [ (e.clientX - r.left) * (cv.width / r.width), (e.clientY - r.top) * (cv.height / r.height) ];
+}
+cv.addEventListener('pointerdown', e => {
+  if(!W) return;
+  cv.setPointerCapture(e.pointerId); drawing = true; redo.length = 0;
+  cur = { color: $('color').value, size: +$('size').value, erase: tool==='erase', pts: [pos(e)] };
+});
+cv.addEventListener('pointermove', e => {
+  if(!drawing) return;
+  cur.pts.push(pos(e)); drawStroke(cur);  // incremental
+});
+cv.addEventListener('pointerup', () => { if(drawing){ drawing=false; strokes.push(cur); cur=null; } });
+
+function drawStroke(s){
+  ctx.globalCompositeOperation = s.erase ? 'destination-out' : 'source-over';
+  ctx.strokeStyle = s.color; ctx.fillStyle = s.color;
+  ctx.lineWidth = s.size; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const p = s.pts;
+  if(p.length === 1){ ctx.beginPath(); ctx.arc(p[0][0], p[0][1], s.size/2, 0, 7); ctx.fill(); return; }
+  ctx.beginPath(); ctx.moveTo(p[0][0], p[0][1]);
+  for(let i=1;i<p.length;i++) ctx.lineTo(p[i][0], p[i][1]);
+  ctx.stroke();
+}
+function redraw(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  for(const s of strokes) drawStroke(s);
+  ctx.globalCompositeOperation = 'source-over';
+}
+$('undo').onclick = () => { if(strokes.length){ redo.push(strokes.pop()); redraw(); } };
+$('redo').onclick = () => { if(redo.length){ strokes.push(redo.pop()); redraw(); } };
+$('clear').onclick = () => { strokes.length=0; redo.length=0; redraw(); };
+document.addEventListener('keydown', e => {
+  if((e.metaKey||e.ctrlKey) && e.key==='z'){ e.preventDefault(); (e.shiftKey?$('redo'):$('undo')).click(); }
+});
+
+function download(blob, name){
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+}
+$('expPng').onclick = () => { if(!W) return; cv.toBlob(b => download(b, 'cleaned_strokes.png')); };
+$('expJson').onclick = () => {
+  if(!W) return;
+  const data = {
+    width: W, height: H,
+    strokes: strokes.filter(s=>!s.erase).map(s => ({
+      size_px: s.size,
+      points: s.pts.map(([x,y]) => [ +(x/W).toFixed(4), +(y/H).toFixed(4) ])  // normalized 0..1
+    }))
+  };
+  download(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}), 'cleaned_strokes.json');
+};
+</script>
+</body>
+</html>
