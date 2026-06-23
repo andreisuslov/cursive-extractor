@@ -9,6 +9,11 @@ extend-exclude = ["cursive_ocr_extraction.py", "*.ipynb"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
 
+# box_editor.py embeds an HTML/CSS/JS UI as a string literal; long lines there are
+# the markup, not Python, so the line-length rule doesn't apply.
+[tool.ruff.lint.per-file-ignores]
+"ocr/box_editor.py" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
