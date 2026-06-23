@@ -180,7 +180,7 @@ button.prim{background:var(--box);border-color:var(--box);color:#04201e;font-wei
 <script>
 const $=id=>document.getElementById(id);
 const cv=$('cv'),ctx=cv.getContext('2d'),wrap=$('cvwrap');
-let doc=null,page=null,IW=0,IH=0,scale=1,tool='select';
+let doc=null,page=null,IW=0,IH=0,scale=1,bs=1,tool='select';  // bs = canvas backing render scale
 let boxes=[],sel=-1,rangeEnd=-1,drag=null,pageDone=false;
 
 /* ---------- tree ---------- */
@@ -198,7 +198,7 @@ async function openPage(d,p){
   doc=d;page=p;sel=-1;rangeEnd=-1;
   const r=await (await fetch('/api/page?doc='+encodeURIComponent(d)+'&page='+encodeURIComponent(p))).json();
   pageDone=r.done; updateDoneBtn();
-  const im=new Image(); im.onload=()=>{IW=im.naturalWidth;IH=im.naturalHeight;cv.width=IW;cv.height=IH;
+  const im=new Image(); im.onload=()=>{IW=im.naturalWidth;IH=im.naturalHeight;
     boxes=r.boxes.map(fromBox); img=im; fitZoom(); renderList(); markTreeActive();};
   im.src=r.img+'&t='+Date.now();
 }
@@ -223,7 +223,10 @@ function setScale(z,ax,ay){
   z=Math.max(0.1,Math.min(8,z));
   let bx=0,by=0;
   if(ax!=null){const r=cv.getBoundingClientRect();bx=(ax-r.left)/r.width;by=(ay-r.top)/r.height;}
-  scale=z; cv.style.width=(IW*scale)+'px'; cv.style.height=(IH*scale)+'px';
+  scale=z;
+  bs=Math.min(z, 6500/Math.max(1,IW), 6500/Math.max(1,IH));  // backing render scale (capped for memory)
+  cv.width=Math.round(IW*bs); cv.height=Math.round(IH*bs);   // render at the zoomed res -> crisp labels/outlines
+  cv.style.width=(IW*z)+'px'; cv.style.height=(IH*z)+'px';
   $('zoom').value=Math.round(z*100); $('zoomV').textContent=Math.round(z*100)+'%'; draw();
   if(ax!=null){const r=cv.getBoundingClientRect(); wrap.scrollLeft+=(r.left+bx*r.width)-ax; wrap.scrollTop+=(r.top+by*r.height)-ay;}
 }
@@ -234,7 +237,8 @@ wrap.addEventListener('wheel',e=>{ if(!e.ctrlKey)return; e.preventDefault(); set
 
 /* ---------- draw ---------- */
 function draw(){
-  if(!img)return; ctx.clearRect(0,0,cv.width,cv.height); ctx.drawImage(img,0,0,IW,IH);
+  if(!img)return; ctx.setTransform(bs,0,0,bs,0,0);  // draw in natural coords at backing res
+  ctx.clearRect(0,0,IW,IH); ctx.drawImage(img,0,0,IW,IH);
   const hs=Math.max(4,7/scale), lw=Math.max(1,1.6/scale);
   boxes.forEach((b,i)=>{const on=i===sel,inR=inRange(i);
     ctx.lineWidth=on?lw*1.8:lw; ctx.strokeStyle=on?'#ffcc00':(inR?'#ff8c42':'#00aaa0');
@@ -251,7 +255,7 @@ function handlesOf(b){ // rect: 8 resize handles; poly: its vertices
 const RH=['nw','n','ne','e','se','s','sw','w'];
 
 /* ---------- hit-test + interaction ---------- */
-function mouse(e){const r=cv.getBoundingClientRect();return[(e.clientX-r.left)*cv.width/r.width,(e.clientY-r.top)*cv.height/r.height];}
+function mouse(e){const r=cv.getBoundingClientRect();return[(e.clientX-r.left)/r.width*IW,(e.clientY-r.top)/r.height*IH];}
 function inside(b,mx,my){const p=polyOf(b);let c=false;for(let i=0,j=p.length-1;i<p.length;j=i++){if((p[i][1]>my)!=(p[j][1]>my)&&mx<(p[j][0]-p[i][0])*(my-p[i][1])/(p[j][1]-p[i][1])+p[i][0])c=!c;}return c;}
 cv.onmousedown=e=>{const[mx,my]=mouse(e),tol=8/scale;
   if(sel>=0){const hh=handlesOf(boxes[sel]);
