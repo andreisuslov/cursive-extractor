@@ -154,9 +154,10 @@ button.prim{background:var(--box);border-color:var(--box);color:#04201e;font-wei
 <div id="main">
  <div id="bar">
   <span id="title" class="pill">pick a page</span><span style="flex:1"></span>
-  <button id="selBtn" class="on">Select</button>
+  <button id="selBtn" class="on">Select (q)</button>
   <button id="addBoxBtn">+ Box</button>
-  <button id="addPtBtn">+ Point</button>
+  <button id="addPtBtn">+ Point (w)</button>
+  <button id="rmPtBtn">&minus; Point (e)</button>
   <button id="delBtn">Del box (⌫)</button>
   <span class="sep"></span>
   <button id="zoutBtn">&minus;</button><input type="range" id="zoom" min="20" max="500" value="100" style="width:90px">
@@ -268,6 +269,9 @@ cv.onmousedown=e=>{const[mx,my]=mouse(e),tol=8/scale;
     for(let i=0;i<hh.length;i++)if(Math.abs(mx-hh[i][0])<tol&&Math.abs(my-hh[i][1])<tol){
       drag=boxes[sel].shape==='poly'?{kind:'vert',i}:{kind:'resize',h:RH[i],b:{...boxes[sel]}};return;}}
   if(tool==='addpt'){for(let i=boxes.length-1;i>=0;i--)if(inside(boxes[i],mx,my)||near(boxes[i],mx,my,tol*2)){sel=i;addPoint(boxes[i],mx,my);renderList();draw();return;}return;}
+  if(tool==='rmpt'){for(let i=boxes.length-1;i>=0;i--){const b=boxes[i];if(b.shape!=='poly')continue;
+    for(let k=0;k<b.verts.length;k++)if(Math.abs(mx-b.verts[k][0])<tol*2&&Math.abs(my-b.verts[k][1])<tol*2){
+      sel=i;if(b.verts.length>3)b.verts.splice(k,1);renderList();draw();return;}}return;}
   if(tool==='addbox'){boxes.push({text:'',shape:'rect',x0:mx,y0:my,x1:mx,y1:my});sel=boxes.length-1;drag={kind:'new'};renderList();return;}
   for(let i=boxes.length-1;i>=0;i--)if(inside(boxes[i],mx,my)){selectBox(i,e.shiftKey);drag={kind:'move',ox:mx,oy:my,snap:JSON.parse(JSON.stringify(boxes[i]))};return;}
   sel=-1;rangeEnd=-1;renderList();draw();
@@ -298,10 +302,17 @@ function selectBox(i,shift){if(shift&&sel>=0)rangeEnd=i;else{sel=i;rangeEnd=-1;}
   const row=$('rows').children[i]; if(row)row.scrollIntoView({block:'nearest'});}
 
 /* ---------- tools ---------- */
-function setTool(t){tool=t;for(const[id,v]of[['selBtn','select'],['addBoxBtn','addbox'],['addPtBtn','addpt']])$(id).classList.toggle('on',v===t);}
-$('selBtn').onclick=()=>setTool('select');$('addBoxBtn').onclick=()=>setTool('addbox');$('addPtBtn').onclick=()=>setTool('addpt');
+const TOOLS=[['selBtn','select'],['addBoxBtn','addbox'],['addPtBtn','addpt'],['rmPtBtn','rmpt']];
+function setTool(t){tool=t;for(const[id,v]of TOOLS)$(id).classList.toggle('on',v===t);}
+for(const[id,v]of TOOLS)$(id).onclick=()=>setTool(v);
 $('delBtn').onclick=()=>{if(sel>=0){boxes.splice(sel,1);sel=-1;rangeEnd=-1;renderList();draw();}};
-document.addEventListener('keydown',e=>{if((e.key==='Backspace'||e.key==='Delete')&&e.target.tagName!=='INPUT'&&sel>=0){e.preventDefault();$('delBtn').onclick();}});
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT')return;                       // don't hijack typing in the word fields
+  if(e.key==='q'){setTool('select');return;}                  // q = select
+  if(e.key==='w'){setTool('addpt');return;}                   // w = add point
+  if(e.key==='e'){setTool('rmpt');return;}                    // e = remove point
+  if((e.key==='Backspace'||e.key==='Delete')&&sel>=0){e.preventDefault();$('delBtn').onclick();}
+});
 
 /* ---------- ordered word list + label shifting ---------- */
 function renderList(){const el=$('rows');el.innerHTML='';
