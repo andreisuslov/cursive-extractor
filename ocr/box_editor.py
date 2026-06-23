@@ -141,8 +141,8 @@ button{background:#30373f;color:var(--ink);border:1px solid var(--line);border-r
 button:hover{background:#3a424c}button.on{background:var(--box);border-color:var(--box);color:#04201e;font-weight:600}
 button.prim{background:var(--box);border-color:var(--box);color:#04201e;font-weight:600}
 .sep{width:1px;height:22px;background:var(--line);margin:0 3px}
-#cvwrap{flex:1;overflow:auto;background:#0e1217}
-#cv{display:block}
+#stage{flex:1;overflow:hidden;background:#0e1217;position:relative}
+#cv{display:block;position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 #list{width:230px;flex:0 0 230px;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:6px}
 #list h2{font-size:11px;color:var(--mut);margin:6px 4px}
 .row{display:flex;gap:5px;align-items:center;padding:2px 3px;border-radius:5px}
@@ -166,7 +166,7 @@ button.prim{background:var(--box);border-color:var(--box);color:#04201e;font-wei
   <button id="saveBtn">Save</button><button id="reBtn" class="prim">Save &amp; re-vectorize</button>
   <span id="msg" class="pill"></span>
  </div>
- <div id="cvwrap"><canvas id="cv"></canvas></div>
+ <div id="stage"><canvas id="cv"></canvas></div>
 </div>
 <div id="list">
  <h2>WORDS (in order)</h2>
@@ -179,8 +179,8 @@ button.prim{background:var(--box);border-color:var(--box);color:#04201e;font-wei
 </div>
 <script>
 const $=id=>document.getElementById(id);
-const cv=$('cv'),ctx=cv.getContext('2d'),wrap=$('cvwrap');
-let doc=null,page=null,IW=0,IH=0,scale=1,bs=1,tool='select';  // bs = canvas backing render scale
+const cv=$('cv'),ctx=cv.getContext('2d'),stage=$('stage'),dpr=window.devicePixelRatio||1;
+let doc=null,page=null,IW=0,IH=0,scale=1,ox=0,oy=0,tool='select';  // scale=zoom; ox,oy=pan offset (content px)
 let boxes=[],sel=-1,rangeEnd=-1,drag=null,pageDone=false;
 
 /* ---------- tree ---------- */
@@ -199,7 +199,7 @@ async function openPage(d,p){
   const r=await (await fetch('/api/page?doc='+encodeURIComponent(d)+'&page='+encodeURIComponent(p))).json();
   pageDone=r.done; updateDoneBtn();
   const im=new Image(); im.onload=()=>{IW=im.naturalWidth;IH=im.naturalHeight;
-    boxes=r.boxes.map(fromBox); img=im; fitZoom(); renderList(); markTreeActive();};
+    boxes=r.boxes.map(fromBox); img=im; resizeCanvas(); fitZoom(); renderList(); markTreeActive();};
   im.src=r.img+'&t='+Date.now();
 }
 let img=null;
@@ -218,33 +218,39 @@ function toBox(o){ // editor box -> boxes.json entry
   return e;
 }
 
-/* ---------- zoom / pan ---------- */
-function setScale(z,ax,ay){
-  z=Math.max(0.1,Math.min(8,z));
-  let bx=0,by=0;
-  if(ax!=null){const r=cv.getBoundingClientRect();bx=(ax-r.left)/r.width;by=(ay-r.top)/r.height;}
-  scale=z;
-  bs=Math.min(z, 6500/Math.max(1,IW), 6500/Math.max(1,IH));  // backing render scale (capped for memory)
-  cv.width=Math.round(IW*bs); cv.height=Math.round(IH*bs);   // render at the zoomed res -> crisp labels/outlines
-  cv.style.width=(IW*z)+'px'; cv.style.height=(IH*z)+'px';
-  $('zoom').value=Math.round(z*100); $('zoomV').textContent=Math.round(z*100)+'%'; draw();
-  if(ax!=null){const r=cv.getBoundingClientRect(); wrap.scrollLeft+=(r.left+bx*r.width)-ax; wrap.scrollTop+=(r.top+by*r.height)-ay;}
+/* ---------- zoom / pan ----------
+   The canvas backs only the VISIBLE viewport at device resolution (dpr), and we
+   draw the page + boxes in screen coords (natural*scale - pan). So box outlines
+   and labels are crisp at ANY zoom with a small, constant buffer (no upscaling).
+   The scanned photo is still limited by its own resolution. */
+function setZlabel(){ $('zoom').value=Math.round(scale*100); $('zoomV').textContent=Math.round(scale*100)+'%'; }
+function resizeCanvas(){ cv.width=Math.round(stage.clientWidth*dpr); cv.height=Math.round(stage.clientHeight*dpr); draw(); }
+function clampPan(){ const vw=stage.clientWidth,vh=stage.clientHeight;
+  ox=Math.max(0,Math.min(ox,Math.max(0,IW*scale-vw))); oy=Math.max(0,Math.min(oy,Math.max(0,IH*scale-vh))); }
+function setScale(z,ax,ay){ z=Math.max(0.05,Math.min(16,z)); const r=cv.getBoundingClientRect();
+  const sx=(ax!=null?ax:r.left+r.width/2)-r.left, sy=(ay!=null?ay:r.top+r.height/2)-r.top;
+  const nx=(sx+ox)/scale, ny=(sy+oy)/scale;   // keep the content point under the cursor fixed
+  scale=z; ox=nx*scale-sx; oy=ny*scale-sy; clampPan(); setZlabel(); draw();
 }
-function fitZoom(){ setScale(Math.min(1,(wrap.clientWidth-24)/IW)); }
+function fitZoom(){ scale=Math.max(0.05,(stage.clientWidth-2)/IW); ox=0; oy=0; clampPan(); setZlabel(); draw(); }
 $('zoom').oninput=()=>setScale($('zoom').value/100);
 $('zinBtn').onclick=()=>setScale(scale*1.25); $('zoutBtn').onclick=()=>setScale(scale/1.25); $('fitBtn').onclick=fitZoom;
-wrap.addEventListener('wheel',e=>{ if(!e.ctrlKey)return; e.preventDefault(); setScale(scale*(1-e.deltaY*0.01),e.clientX,e.clientY);},{passive:false});
+cv.addEventListener('wheel',e=>{ e.preventDefault();
+  if(e.ctrlKey) setScale(scale*Math.exp(-e.deltaY*0.01),e.clientX,e.clientY);  // trackpad pinch
+  else { ox+=e.deltaX; oy+=e.deltaY; clampPan(); draw(); }                      // two-finger scroll = pan
+},{passive:false});
 
 /* ---------- draw ---------- */
 function draw(){
-  if(!img)return; ctx.setTransform(bs,0,0,bs,0,0);  // draw in natural coords at backing res
-  ctx.clearRect(0,0,IW,IH); ctx.drawImage(img,0,0,IW,IH);
-  const hs=Math.max(4,7/scale), lw=Math.max(1,1.6/scale);
+  if(!img)return; const vw=stage.clientWidth, vh=stage.clientHeight;
+  ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,vw,vh);  // device-res, screen coords
+  ctx.imageSmoothingQuality='high'; ctx.drawImage(img,-ox,-oy,IW*scale,IH*scale);
+  const S=p=>[p[0]*scale-ox, p[1]*scale-oy];   // natural -> screen
   boxes.forEach((b,i)=>{const on=i===sel,inR=inRange(i);
-    ctx.lineWidth=on?lw*1.8:lw; ctx.strokeStyle=on?'#ffcc00':(inR?'#ff8c42':'#00aaa0');
-    const pts=polyOf(b); ctx.beginPath(); pts.forEach((p,k)=>k?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); ctx.stroke();
-    ctx.fillStyle=ctx.strokeStyle; ctx.font=(13/scale)+'px sans-serif'; ctx.fillText((b.text||'')+' ['+i+']',pts[0][0],pts[0][1]-3/scale);
-    if(on){const hh=handlesOf(b); ctx.fillStyle='#ffcc00'; hh.forEach(h=>ctx.fillRect(h[0]-hs/2,h[1]-hs/2,hs,hs));}
+    ctx.lineWidth=on?2.4:1.4; ctx.strokeStyle=on?'#ffcc00':(inR?'#ff8c42':'#00aaa0');
+    const pts=polyOf(b).map(S); ctx.beginPath(); pts.forEach((p,k)=>k?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); ctx.stroke();
+    ctx.fillStyle=ctx.strokeStyle; ctx.font='13px sans-serif'; ctx.fillText((b.text||'')+' ['+i+']',pts[0][0],pts[0][1]-3);
+    if(on){const hh=handlesOf(b).map(S); ctx.fillStyle='#ffcc00'; hh.forEach(h=>ctx.fillRect(h[0]-4,h[1]-4,8,8));}
   });
 }
 function polyOf(b){ return b.shape==='poly'?b.verts:[[b.x0,b.y0],[b.x1,b.y0],[b.x1,b.y1],[b.x0,b.y1]]; }
@@ -255,7 +261,7 @@ function handlesOf(b){ // rect: 8 resize handles; poly: its vertices
 const RH=['nw','n','ne','e','se','s','sw','w'];
 
 /* ---------- hit-test + interaction ---------- */
-function mouse(e){const r=cv.getBoundingClientRect();return[(e.clientX-r.left)/r.width*IW,(e.clientY-r.top)/r.height*IH];}
+function mouse(e){const r=cv.getBoundingClientRect();return[((e.clientX-r.left)+ox)/scale,((e.clientY-r.top)+oy)/scale];}
 function inside(b,mx,my){const p=polyOf(b);let c=false;for(let i=0,j=p.length-1;i<p.length;j=i++){if((p[i][1]>my)!=(p[j][1]>my)&&mx<(p[j][0]-p[i][0])*(my-p[i][1])/(p[j][1]-p[i][1])+p[i][0])c=!c;}return c;}
 cv.onmousedown=e=>{const[mx,my]=mouse(e),tol=8/scale;
   if(sel>=0){const hh=handlesOf(boxes[sel]);
@@ -320,7 +326,7 @@ async function save(re){$('msg').textContent=re?'re-vectorizing…':'saving…';
     body:JSON.stringify({doc,page,boxes:boxes.map(toBox),reprocess:!!re})})).json();
   $('msg').textContent=r.ok?(re?'✓ saved + re-vectorized':'✓ saved'):('✗ '+(r.error||'error'));}
 $('saveBtn').onclick=()=>save(false);$('reBtn').onclick=()=>save(true);
-window.addEventListener('resize',()=>{if(IW)draw();});
+window.addEventListener('resize',()=>{if(IW){resizeCanvas();clampPan();draw();}});
 loadTree();
 </script></body></html>"""
 
