@@ -1,27 +1,36 @@
-"""Local web tool to review + fix per-page word boxes, then re-vectorize.
+"""Local web tool to review + fix per-page word BOUNDING SHAPES, then re-vectorize.
+
+A "bounding shape" is the outline around one word: a rectangle by default, or an
+arbitrary polygon once you add vertices. It is a shape, not a "box"/"triangle"/
+"octagon" -- don't assume a vertex count. For vectorizing the shape is reduced to
+its bounding box (an axis-aligned rectangle) for the crop, and ink outside the
+shape is masked out.
 
 Browse the output tree (documents -> pages); for each page see the image with its
-detected word boxes and fix them by hand:
+detected word shapes and fix them by hand:
 
-  * geometry  -- move/resize a box; EXPAND it when the word is cut; turn a box into
-                 an arbitrary POLYGON (add/drag/delete vertices) to tightly outline
-                 a slanted/irregular word; add a missing box; delete a junk box.
-  * labels    -- an ordered box LIST with a text field per box (fix spelling), plus
-                 SHIFT operations to re-align the whole word sequence to the boxes
-                 (e.g. box 20 should hold box 21's word -> "pull labels up" from 20).
+  * geometry  -- move/resize a shape; EXPAND it when the word is cut; turn a
+                 rectangle into an arbitrary polygon (add/drag/remove vertices) to
+                 tightly outline a slanted/irregular word; add a missing shape;
+                 delete a junk shape.
+  * labels    -- an ordered LIST with a text field per shape (fix spelling), plus
+                 SHIFT operations to re-align the whole word sequence to the shapes
+                 (e.g. shape 20 should hold shape 21's word -> "pull labels up" from 20).
   * progress  -- mark a page done; the tree shows what's finished so you can stop
                  and resume later.
   * zoom/pan  -- slider, +/-, Fit, and trackpad pinch (ctrl-wheel); two-finger
                  scroll to pan.
 
-Save writes the corrected boxes.json (with any polygon) back in place; "Save &
-re-vectorize" also re-runs ocr.vectorize + ocr.package_boxes for the page.
+Save writes the corrected boxes.json (each shape keeps its full polygon) back in
+place; "Save & re-vectorize" also re-runs ocr.vectorize + ocr.package_boxes.
 
     python -m ocr.box_editor                 # http://127.0.0.1:8765, root=outputs/
     python -m ocr.box_editor --root /path --port 8800
 
-Stdlib only; single local user. box_2d is [ymin,xmin,ymax,xmax] on a 0-1000 scale
-(page-relative); an optional polygon is a list of [x,y] in the same 0-1000 scale.
+Stdlib only; single local user. On disk each shape is box_2d (its bounding box,
+[ymin,xmin,ymax,xmax] on a 0-1000 page scale) plus, for a polygon, a list of [x,y]
+vertices in the same 0-1000 scale (the field name 'box_2d' is kept for pipeline
+compatibility, but it denotes the shape's bounding box).
 """
 
 import argparse
@@ -126,7 +135,7 @@ def reprocess(doc: str, page: str) -> tuple[bool, str]:
     return True, "\n".join(logs)
 
 
-HTML = r"""<!doctype html><html><head><meta charset="utf-8"><title>Box Editor</title>
+HTML = r"""<!doctype html><html><head><meta charset="utf-8"><title>Bounding-Shape Editor</title>
 <style>
 :root{--bg:#15191e;--panel:#222831;--ink:#e6edf3;--mut:#9fb0c0;--line:#39424d;--box:#00aaa0;--sel:#ffcc00;--ok:#3fd07a}
 *{box-sizing:border-box}body{margin:0;display:flex;height:100vh;font:13px system-ui,sans-serif;background:var(--bg);color:var(--ink)}
@@ -155,10 +164,10 @@ button.prim{background:var(--box);border-color:var(--box);color:#04201e;font-wei
  <div id="bar">
   <span id="title" class="pill">pick a page</span><span style="flex:1"></span>
   <button id="selBtn" class="on">Select (q)</button>
-  <button id="addBoxBtn">+ Box</button>
-  <button id="addPtBtn">+ Point (w)</button>
-  <button id="rmPtBtn">&minus; Point (e)</button>
-  <button id="delBtn">Del box (⌫)</button>
+  <button id="addBoxBtn" title="new rectangular bounding shape">+ Rect</button>
+  <button id="addPtBtn" title="add a vertex (rectangle becomes a polygon)">+ Point (w)</button>
+  <button id="rmPtBtn" title="remove a vertex">&minus; Point (e)</button>
+  <button id="delBtn">Del shape (⌫)</button>
   <span class="sep"></span>
   <button id="zoutBtn">&minus;</button><input type="range" id="zoom" min="20" max="500" value="100" style="width:90px">
   <button id="zinBtn">+</button><button id="fitBtn">Fit</button><span id="zoomV" class="pill">100%</span>
