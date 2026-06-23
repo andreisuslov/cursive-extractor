@@ -17,7 +17,6 @@ import argparse
 import json
 import os
 
-import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -42,51 +41,59 @@ def draw_vectorized(
     crop_image: Image.Image,
     points: list[list[float]],
     color: tuple[int, int, int] = TEAL,
-    cap_mult: float = 3.5,
-    smooth: int = 15,
-    path_smooth: int = 3,
-    min_pts: int = 16,
+    min_width: float = 1.0,
+    max_width: float = 14.0,
+    gamma: float = 1.6,
+    smooth: int = 11,
+    path_smooth: int = 7,
 ) -> Image.Image:
-    """Draw box-relative [x, y, pen] strokes onto an RGB copy of ``crop_image`` as
-    smooth brush-tubes whose width COVERS the original ink.
+    """Draw box-relative [x, y, pen] strokes onto an RGB copy of ``crop_image``,
+    with stroke width following the ORIGINAL pen pressure.
 
-    Width follows the local ink half-width (a distance transform of the crop's
-    ink): a disc of that radius at each skeleton point exactly fills the stroke, so
-    dark/heavy strokes are fully covered while light/thin strokes stay thin (and so
-    width still tracks pen pressure, since heavier pressure = wider ink). The radius
-    is capped at ``cap_mult`` x the median half-width (so a crossing/blob can't
-    balloon) and SMOOTHED along the stroke (``smooth`` pts) for gradual fat<->thin
-    transitions; the centreline is only lightly smoothed (``path_smooth``) so small
-    cursive loops survive. Strokes under ``min_pts`` points are dropped as noise
-    pimples. Each stroke is overlapping discs -- no beads, gaps, or dotting.
+    Pressure is read as ink DARKNESS sampled along the skeleton (a 1-D measure
+    valid on strokes: a light hairline is pale, a heavy down-stroke saturated),
+    normalized to this word's own ink, ``gamma``>1 so dark/heavy ink stays thick
+    while light ink renders thin, capped to ``[min_width, max_width]``. The width
+    series is SMOOTHED along each stroke (``smooth`` points) so fat<->thin
+    transitions are gradual, and each stroke is rendered as overlapping discs (a
+    brush tube) rather than jointed line segments -- no beads, gaps, or dotting.
     """
     img = crop_image.convert("RGB")
     draw = ImageDraw.Draw(img)
     w, h = img.size
-    gray = np.asarray(crop_image.convert("L"))
-    ink = (gray < 200).astype(np.uint8)  # cleaned crop is ink-on-white
-    dist = cv2.distanceTransform(ink, cv2.DIST_L2, 5) if ink.any() else np.zeros(gray.shape, "f4")
+    gray = np.asarray(crop_image.convert("L"), dtype=np.float32)
 
-    def radius_at(x: float, y: float) -> float:
-        return float(dist[min(h - 1, max(0, round(y))), min(w - 1, max(0, round(x)))])
+    def darkness_at(x: float, y: float) -> float:
+        xi, yi = min(w - 1, max(0, round(x))), min(h - 1, max(0, round(y)))
+        win = gray[max(0, yi - 1) : yi + 2, max(0, xi - 1) : xi + 2]
+        return 255.0 - float(win.min())  # darkest ink in a 3x3 nbhd around the point
 
     px = [(p[0] * w, p[1] * h, p[2]) for p in points]
-    radii_all = [radius_at(x, y) for x, y, pen in px if pen == 1]
-    pos = [r for r in radii_all if r > 0]
-    cap = max(2.0, cap_mult * float(np.median(pos))) if pos else 6.0  # clamp crossings/blobs
+    dark = [darkness_at(x, y) for x, y, pen in px if pen == 1]
+    lo, hi = (
+        (float(np.percentile(dark, 20)), float(np.percentile(dark, 92))) if dark else (0.0, 1.0)
+    )
+    span = max(1.0, hi - lo)
 
+    def width_of(d: float) -> float:
+        t = min(1.0, max(0.0, (d - lo) / span)) ** gamma
+        return min_width + t * (max_width - min_width)
+
+    # split into pen-down strokes, then draw each as a smoothed-width disc tube
     stroke: list[tuple[float, float]] = []
     for x, y, pen in [*px, (0.0, 0.0, 0)]:  # sentinel pen-up flushes the last stroke
         if pen == 1:
             stroke.append((x, y))
             continue
-        if len(stroke) >= min_pts:  # else: a noise pimple -> skip
-            radii = _smooth(np.array([min(cap, radius_at(sx, sy)) for sx, sy in stroke]), smooth)
+        if len(stroke) >= 1:
+            widths = _smooth(np.array([width_of(darkness_at(sx, sy)) for sx, sy in stroke]), smooth)
+            # smooth the centreline too, so the tube curves instead of following the
+            # jagged 1-px skeleton (darkness is still sampled at the true location).
             xs = _smooth(np.array([sx for sx, _ in stroke]), path_smooth)
             ys = _smooth(np.array([sy for _, sy in stroke]), path_smooth)
-            for sx, sy, r in zip(xs, ys, radii, strict=False):
-                rr = max(0.7, float(r))
-                draw.ellipse([sx - rr, sy - rr, sx + rr, sy + rr], fill=color)
+            for sx, sy, wd in zip(xs, ys, widths, strict=False):
+                r = max(0.5, wd / 2.0)
+                draw.ellipse([sx - r, sy - r, sx + r, sy + r], fill=color)
         stroke = []
     return img
 

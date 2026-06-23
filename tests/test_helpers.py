@@ -67,14 +67,11 @@ def test_extract_boxes_parse_args_overrides():
 # --- package_boxes.draw_vectorized ---------------------------------------------
 
 
-# A real-length pen-down stroke (draw_vectorized drops sub-noise strokes < ~16 pts).
-_STROKE = [[0.1 + 0.8 * i / 19, 0.5, 1] for i in range(20)] + [[0.9, 0.5, 0]]
-
-
 def test_draw_vectorized_draws_without_mutating_input():
     img = Image.new("RGB", (40, 20), (255, 255, 255))
     before = np.array(img).copy()
-    out = package_boxes.draw_vectorized(img, _STROKE)
+    points = [[0.1, 0.5, 1], [0.9, 0.5, 1], [0.9, 0.5, 0]]  # one pen-down segment
+    out = package_boxes.draw_vectorized(img, points)
     assert out is not img
     assert out.size == img.size
     assert np.array_equal(np.array(img), before)  # input image not mutated
@@ -92,7 +89,8 @@ def test_draw_vectorized_grayscale_crop():
     # clean_word() returns a mode-"L" (grayscale) crop; drawing the RGB teal
     # overlay on it must not crash and must yield an RGB image with the stroke.
     img = Image.new("L", (40, 20), 255)
-    out = package_boxes.draw_vectorized(img, _STROKE)
+    points = [[0.1, 0.5, 1], [0.9, 0.5, 1], [0.9, 0.5, 0]]
+    out = package_boxes.draw_vectorized(img, points)
     assert out.mode == "RGB"
     arr = np.array(out)
     assert (arr[..., 0] != arr[..., 1]).any()  # a coloured (non-gray) pixel was drawn
