@@ -27,24 +27,36 @@ from .pdf_utils import crop_to_box, ensure_page_png, load_page
 TEAL = (0, 170, 160)
 
 
+def _smooth(vals: np.ndarray, k: int) -> np.ndarray:
+    """Centered moving average (edge-replicated), so a per-point series varies
+    gradually instead of jittering point to point."""
+    if k <= 1 or vals.size < 3:
+        return vals
+    k = min(k | 1, vals.size if vals.size % 2 else vals.size - 1)  # odd, <= len
+    pad = k // 2
+    return np.convolve(np.pad(vals, pad, mode="edge"), np.ones(k) / k, mode="valid")
+
+
 def draw_vectorized(
     crop_image: Image.Image,
     points: list[list[float]],
     color: tuple[int, int, int] = TEAL,
-    min_width: int = 1,
-    max_width: int = 14,
+    min_width: float = 1.0,
+    max_width: float = 14.0,
     gamma: float = 1.6,
+    smooth: int = 11,
+    path_smooth: int = 7,
 ) -> Image.Image:
     """Draw box-relative [x, y, pen] strokes onto an RGB copy of ``crop_image``,
-    with each segment's width following the ORIGINAL pen pressure.
+    with stroke width following the ORIGINAL pen pressure.
 
     Pressure is read as ink DARKNESS sampled along the skeleton (a 1-D measure
-    valid on strokes: a light-pressure hairline is pale, a heavy down-stroke is
-    saturated), normalized to this word's own ink and capped to ``[min_width,
-    max_width]``. Unlike a distance transform, darkness does NOT balloon at stroke
-    crossings or on solid blobs, so the rendered width tracks real pen pressure
-    rather than local ink solidity. ``convert("RGB")`` so a mode-"L" crop takes the
-    colour.
+    valid on strokes: a light hairline is pale, a heavy down-stroke saturated),
+    normalized to this word's own ink, ``gamma``>1 so dark/heavy ink stays thick
+    while light ink renders thin, capped to ``[min_width, max_width]``. The width
+    series is SMOOTHED along each stroke (``smooth`` points) so fat<->thin
+    transitions are gradual, and each stroke is rendered as overlapping discs (a
+    brush tube) rather than jointed line segments -- no beads, gaps, or dotting.
     """
     img = crop_image.convert("RGB")
     draw = ImageDraw.Draw(img)
@@ -63,16 +75,26 @@ def draw_vectorized(
     )
     span = max(1.0, hi - lo)
 
-    def width_at(x: float, y: float) -> float:
-        # gamma > 1 prioritizes DARK (heavy-pressure) ink -- it stays thick/prominent,
-        # while light ink renders thin (still covered, just not emphasized).
-        t = min(1.0, max(0.0, (darkness_at(x, y) - lo) / span)) ** gamma
+    def width_of(d: float) -> float:
+        t = min(1.0, max(0.0, (d - lo) / span)) ** gamma
         return min_width + t * (max_width - min_width)
 
-    for i in range(1, len(px)):
-        if px[i][2] == 1 and px[i - 1][2] == 1:  # both pen-down: connect
-            lw = max(1, round(0.5 * (width_at(*px[i][:2]) + width_at(*px[i - 1][:2]))))
-            draw.line([(px[i - 1][0], px[i - 1][1]), (px[i][0], px[i][1])], fill=color, width=lw)
+    # split into pen-down strokes, then draw each as a smoothed-width disc tube
+    stroke: list[tuple[float, float]] = []
+    for x, y, pen in [*px, (0.0, 0.0, 0)]:  # sentinel pen-up flushes the last stroke
+        if pen == 1:
+            stroke.append((x, y))
+            continue
+        if len(stroke) >= 1:
+            widths = _smooth(np.array([width_of(darkness_at(sx, sy)) for sx, sy in stroke]), smooth)
+            # smooth the centreline too, so the tube curves instead of following the
+            # jagged 1-px skeleton (darkness is still sampled at the true location).
+            xs = _smooth(np.array([sx for sx, _ in stroke]), path_smooth)
+            ys = _smooth(np.array([sy for _, sy in stroke]), path_smooth)
+            for sx, sy, wd in zip(xs, ys, widths, strict=False):
+                r = max(0.5, wd / 2.0)
+                draw.ellipse([sx - r, sy - r, sx + r, sy + r], fill=color)
+        stroke = []
     return img
 
 
