@@ -22,6 +22,7 @@
   #stage { position:relative; margin:0 auto; box-shadow:0 0 0 1px var(--line); background:
       conic-gradient(#2c333b 25%, #232a31 0 50%, #2c333b 0 75%, #232a31 0) 0 0/22px 22px; }
   #stage img, #stage canvas { position:absolute; left:0; top:0; width:100%; height:100%; image-rendering:auto; }
+  #guides { pointer-events:none; }
   #paint { cursor:crosshair; touch-action:none; }
   .hint { color:var(--muted); padding:6px 12px; border-top:1px solid var(--line); background:var(--panel); }
   .pill { font-size:11px; color:var(--muted); }
@@ -49,6 +50,12 @@
       <label>zoom</label><input type="range" id="zoom" min="20" max="300" value="100" /><span id="zoomV" class="pill">100%</span>
     </div>
     <div class="grp">
+      <button id="guideBtn">Guides</button>
+      <label>baseline</label><input type="range" id="base" min="0" max="100" value="72" />
+      <label>x-height</label><input type="range" id="xh" min="2" max="60" value="22" />
+      <span class="pill">(0,±1,±1.2,±1.5,±1.8 — not exported)</span>
+    </div>
+    <div class="grp">
       <button id="undo">Undo</button><button id="redo">Redo</button><button id="clear">Clear</button>
     </div>
     <div class="grp">
@@ -61,6 +68,7 @@
   <div id="stage">
     <img id="ref" alt="" />
     <img id="overlay" alt="" />
+    <canvas id="guides"></canvas>
     <canvas id="paint"></canvas>
   </div>
 </div>
@@ -69,7 +77,25 @@
 <script>
 const $ = id => document.getElementById(id);
 const stage = $('stage'), refImg = $('ref'), ovImg = $('overlay'), cv = $('paint'), ctx = cv.getContext('2d');
+const gcv = $('guides'), gctx = gcv.getContext('2d');
 let W = 0, H = 0, scale = 1;
+let guidesOn = false;
+const GUIDE_LEVELS = [0, 1, 1.2, 1.5, 1.8, -1, -1.2, -1.5, -1.8];  // baseline=0, x-height=1
+function drawGuides(){
+  gctx.clearRect(0, 0, gcv.width, gcv.height);
+  if(!guidesOn || !W) return;
+  const base = (+$('base').value)/100 * gcv.height;     // baseline y (px)
+  const xh   = (+$('xh').value)/100 * gcv.height;        // one x-height unit (px)
+  for(const L of GUIDE_LEVELS){
+    const y = base - L*xh;                                // up = +levels
+    gctx.strokeStyle = L===0 ? 'rgba(255,70,70,.95)' : L===1 ? 'rgba(255,180,0,.9)' : 'rgba(110,150,255,.55)';
+    gctx.lineWidth = (L===0||L===1) ? 1.6 : 1; gctx.setLineDash(L===0 ? [] : [7,5]);
+    gctx.beginPath(); gctx.moveTo(0,y); gctx.lineTo(gcv.width,y); gctx.stroke();
+  }
+  gctx.setLineDash([]);
+}
+$('guideBtn').onclick = () => { guidesOn=!guidesOn; $('guideBtn').classList.toggle('on',guidesOn); drawGuides(); };
+$('base').oninput = drawGuides; $('xh').oninput = drawGuides;
 let tool = 'brush', drawing = false, cur = null;
 const strokes = [];   // {color,size,erase,pts:[[x,y],...]}  coords in image px
 const redo = [];
@@ -82,9 +108,9 @@ function loadInto(file, imgEl, after){
 }
 $('refFile').onchange = e => loadInto(e.target.files[0], refImg, img => {
   W = img.naturalWidth; H = img.naturalHeight;
-  cv.width = W; cv.height = H;
+  cv.width = W; cv.height = H; gcv.width = W; gcv.height = H;
   applyZoom();
-  strokes.length = 0; redo.length = 0; redraw();
+  strokes.length = 0; redo.length = 0; redraw(); drawGuides();
   $('hint').innerHTML = `Canvas ${W}×${H}px. Paint the strokes; Undo = ⌘/Ctrl-Z.`;
 });
 $('ovFile').onchange = e => loadInto(e.target.files[0], ovImg);
