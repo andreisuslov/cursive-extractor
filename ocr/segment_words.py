@@ -170,6 +170,37 @@ def split_words_in_blob(
     return [(x + a, y, b - a, h) for a, b in merged if b - a >= 0.4 * xh]
 
 
+def detect_lines(binv: np.ndarray, xh: float) -> list[tuple[int, int, int, int]]:
+    """Text-line blobs (x, y, w, h) in reading order -- RLSA with a wide horizontal
+    kernel so a whole line merges, never across lines."""
+    lines = word_blobs(binv, xh, gap_frac=1.5)
+    lines.sort(key=lambda b: (round((b[1] + b[3] / 2) / (1.3 * xh)), b[0]))
+    return lines
+
+
+def split_line_n(
+    binv: np.ndarray, x: int, y: int, w: int, h: int, n: int, xh: float
+) -> list[tuple[int, int, int, int]]:
+    """Cut a line blob into exactly ``n`` words at the ``n-1`` lowest-ink columns
+    (word gaps), keeping cuts spaced apart. ``n`` comes from Claude reading the line,
+    so the geometry is deterministic but the WORD COUNT is correct."""
+    if n <= 1:
+        return [(x, y, w, h)]
+    col = (binv[y : y + h, x : x + w] > 0).sum(0).astype(np.float64)
+    k = max(3, round(0.5 * xh) | 1)
+    col = np.convolve(col, np.ones(k) / k, mode="same")
+    margin, spacing, cuts = max(2, round(0.3 * xh)), max(3, round(0.6 * xh)), []
+    for c in np.argsort(col):  # lowest ink first = best gaps
+        c = int(c)
+        if c < margin or c > w - margin or any(abs(c - q) < spacing for q in cuts):
+            continue
+        cuts.append(c)
+        if len(cuts) == n - 1:
+            break
+    bounds = [0, *sorted(cuts), w]
+    return [(x + bounds[i], y, bounds[i + 1] - bounds[i], h) for i in range(len(bounds) - 1)]
+
+
 def segment_page(rgb: np.ndarray) -> list[dict]:
     """Return word shapes [{text:'', box_2d, polygon}, ...] in reading order, 0-1000."""
     H, W = rgb.shape[:2]
