@@ -333,27 +333,106 @@ def split_line_n(
     return [(x + bounds[i], y, bounds[i + 1] - bounds[i], h) for i in range(len(bounds) - 1)]
 
 
+def split_line_words(
+    binv: np.ndarray,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    xh: float,
+    drop_frac: float = 0.80,
+    run_frac: float = 0.45,
+    empty_run_frac: float = 0.22,
+    min_word_frac: float = 0.55,
+    col_min_ink: int = 2,
+) -> list[tuple[int, int, int, int]]:
+    """Split a line into WORDS by UPPER-CONTOUR DROP.
+
+    Between two words the top ink contour falls toward the baseline (the pen lifts /
+    dips through the gap), while within a word the contour stays high on the letter
+    bodies. So a column is "low" when it is empty OR its (smoothed) top contour sits
+    below ``drop_frac`` of the band height; a sustained interior run of low columns is
+    a word boundary. This finds gaps that ink-DENSITY projection can't, because in
+    cursive adjacent words overlap in x-extent but not in their upper profile.
+    Returns tight per-word ``(x, y, w, h)`` boxes.
+    """
+    band = (binv[y : y + h, x : x + w] > 0).copy()
+    bh, bw = band.shape
+    if bw < 2 or bh < 2:
+        return [(x, y, w, h)]
+    band[(band.sum(1) / bw) > 0.55, :] = False  # drop residual full-width rule rows
+    occupied = band.sum(0) >= col_min_ink
+    top = band.argmax(0).astype(np.float64)  # first ink row per column (0 if none...)
+    top[~band.any(0)] = bh  # ...so mark empty columns as "low" (contour at baseline)
+    top = _smooth(top, max(3, round(0.05 * xh) | 1))
+    low = (~occupied) | (top >= drop_frac * bh)
+    run_w, empty_w = max(3, round(run_frac * xh)), max(2, round(empty_run_frac * xh))
+    cuts = []
+    for a, b in _runs(low):
+        if a == 0 or b >= bw:
+            continue  # only interior runs split words
+        need = empty_w if not occupied[a:b].any() else run_w
+        if (b - a) >= need and occupied[:a].any() and occupied[b:].any():
+            cuts.append((a + b) // 2)
+    ink = np.where(occupied)[0]
+    if ink.size == 0:
+        return []
+    left, right = int(ink[0]), int(ink[-1])
+    bounds = [left, *[c for c in cuts if left < c < right], right + 1]
+    words = []
+    for i in range(len(bounds) - 1):
+        idx = np.where(occupied[bounds[i] : bounds[i + 1]])[0]
+        if idx.size:
+            words.append([bounds[i] + int(idx[0]), bounds[i] + int(idx[-1]) + 1])
+    # merge a too-thin sliver into whichever neighbour it sits closest to
+    minw = min_word_frac * xh
+    changed = True
+    while changed and len(words) > 1:
+        changed = False
+        for i, (a, b) in enumerate(words):
+            if b - a >= minw:
+                continue
+            if i == 0:
+                words[1][0] = a
+            elif i == len(words) - 1:
+                words[-2][1] = b
+            elif a - words[i - 1][1] <= words[i + 1][0] - b:
+                words[i - 1][1] = b
+            else:
+                words[i + 1][0] = a
+            words.pop(i)
+            changed = True
+            break
+    out = []
+    for wa, wb in words:
+        rows = np.where(band[:, wa:wb].any(1))[0]
+        if rows.size:
+            out.append((x + wa, y + int(rows[0]), wb - wa, int(rows[-1]) - int(rows[0]) + 1))
+    return out
+
+
 def segment_page(rgb: np.ndarray) -> list[dict]:
-    """Return word shapes [{text:'', box_2d, polygon}, ...] in reading order, 0-1000."""
+    """Return word shapes [{text:'', box_2d, polygon}, ...] in reading order, 0-1000.
+
+    Deterministic: detect lines, then split each line into words by upper-contour
+    drop, then a tight polygon per word."""
     H, W = rgb.shape[:2]
     binv = remove_rules(extract_ink(rgb))
     xh = median_xheight(binv)
-    # stage 1: RLSA merges each line into a blob; stage 2: split that blob into words
-    words = []
-    for x, y, w, h in word_blobs(binv, xh, gap_frac=1.5):
-        words.extend(split_words_in_blob(binv, x, y, w, h, xh))
-    words.sort(key=lambda b: (round((b[1] + b[3] / 2) / (1.3 * xh)), b[0]))  # line, L->R
     shapes = []
-    for x, y, w, h in words:
-        poly = word_polygon(binv, x, y, w, h)
-        if not poly:
-            continue
-        xs = [p[0] for p in poly]
-        ys = [p[1] for p in poly]
-        box = [_q(min(ys), H), _q(min(xs), W), _q(max(ys), H), _q(max(xs), W)]
-        shapes.append(
-            {"text": "", "box_2d": box, "polygon": [[_q(px, W), _q(py, H)] for px, py in poly]}
-        )
+    for lx, ly, lw, lh in detect_lines(binv, xh):
+        for x, y, w, h in split_line_words(binv, lx, ly, lw, lh, xh):
+            if (w > 5.0 * xh and h < 0.45 * xh) or w < 0.18 * xh or h < 0.18 * xh:
+                continue  # drop rule-like and speck boxes
+            poly = word_polygon(binv, x, y, w, h)
+            if not poly:
+                continue
+            xs = [p[0] for p in poly]
+            ys = [p[1] for p in poly]
+            box = [_q(min(ys), H), _q(min(xs), W), _q(max(ys), H), _q(max(xs), W)]
+            shapes.append(
+                {"text": "", "box_2d": box, "polygon": [[_q(px, W), _q(py, H)] for px, py in poly]}
+            )
     return shapes
 
 
