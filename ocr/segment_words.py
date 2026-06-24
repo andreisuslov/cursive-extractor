@@ -458,17 +458,26 @@ def _components(binv: np.ndarray, xh: float) -> list[tuple[int, int, int, int]]:
 
 
 def _word_hull(
-    binv: np.ndarray, x0: int, y0: int, x1: int, y1: int
+    binv: np.ndarray, x0: int, y0: int, x1: int, y1: int, xh: float
 ) -> list[tuple[int, int]] | None:
-    """Convex hull (simplified) of the ink in a word box -- a tight outline that hugs
-    the word like a hand-drawn shape, rather than an axis-aligned rectangle."""
-    ys, xs = np.nonzero(binv[y0:y1, x0:x1] > 0)
-    if len(xs) < 3:
+    """Tight CONCAVE outline of a word's ink: close the strokes into one blob (kernel
+    ~0.45*xh bridges intra-word stroke gaps), take its external contour, simplify it.
+    Hugs the word's actual shape like a hand-drawn outline -- truer than a convex hull."""
+    sub = (binv[y0:y1, x0:x1] > 0).astype(np.uint8)
+    if sub.sum() < 3:
         return None
-    pts = np.column_stack([xs + x0, ys + y0]).astype(np.int32)
-    hull = cv2.convexHull(pts)
-    hull = cv2.approxPolyDP(hull, 0.01 * cv2.arcLength(hull, True), True).reshape(-1, 2)
-    return [(int(px), int(py)) for px, py in hull]
+    kk = max(3, round(0.45 * xh) | 1)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kk, kk))
+    cnts, _ = cv2.findContours(
+        cv2.morphologyEx(sub, cv2.MORPH_CLOSE, k), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not cnts:
+        return None
+    c = max(cnts, key=cv2.contourArea)
+    c = cv2.approxPolyDP(c, 0.012 * cv2.arcLength(c, True), True).reshape(-1, 2)
+    if len(c) < 3:
+        return None
+    return [(int(px) + x0, int(py) + y0) for px, py in c]
 
 
 def group_line_words(
@@ -568,7 +577,7 @@ def segment_page(rgb: np.ndarray) -> list[dict]:
             rows = np.where((binv[y0:y1, x0:x1] > 0).any(1))[0]  # retighten y after a split
             if rows.size:
                 y0, y1 = y0 + int(rows[0]), y0 + int(rows[-1]) + 1
-            hull = _word_hull(binv, x0, y0, x1, y1)
+            hull = _word_hull(binv, x0, y0, x1, y1, xh)
             if not hull:
                 continue
             box = [_q(y0, H), _q(x0, W), _q(y1, H), _q(x1, W)]
