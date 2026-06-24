@@ -577,6 +577,11 @@ def segment_page(rgb: np.ndarray) -> list[dict]:
             rows = np.where((binv[y0:y1, x0:x1] > 0).any(1))[0]  # retighten y after a split
             if rows.size:
                 y0, y1 = y0 + int(rows[0]), y0 + int(rows[-1]) + 1
+            # drop sparse wide junk (a ruled line is a thin stroke across a wide box)
+            if (x1 - x0) > 2 * xh:
+                fill = float((binv[y0:y1, x0:x1] > 0).sum()) / max(1, (x1 - x0) * (y1 - y0))
+                if fill < 0.06:
+                    continue
             hull = _word_hull(binv, x0, y0, x1, y1, xh)
             if not hull:
                 continue
