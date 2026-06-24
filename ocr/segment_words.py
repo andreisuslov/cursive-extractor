@@ -333,6 +333,27 @@ def split_line_n(
     return [(x + bounds[i], y, bounds[i + 1] - bounds[i], h) for i in range(len(bounds) - 1)]
 
 
+def _otsu_threshold(vals: list[float]) -> float:
+    """1-D Otsu: the value that best splits ``vals`` into two clusters (maximizes
+    between-class variance). Used per line to separate inter-letter from inter-word
+    gap widths. Returns a threshold; widths >= it are the wider (word-gap) cluster."""
+    v = sorted(vals)
+    n = len(v)
+    if n < 2:
+        return v[0] if v else 0.0
+    arr = np.array(v, dtype=np.float64)
+    best_t, best_var = v[0], -1.0
+    for i in range(1, n):
+        if v[i] == v[i - 1]:
+            continue
+        t = (v[i - 1] + v[i]) / 2.0
+        lo, hi = arr[arr < t], arr[arr >= t]
+        var = (len(lo) * len(hi)) * (lo.mean() - hi.mean()) ** 2  # n^2 * between-class var
+        if var > best_var:
+            best_var, best_t = var, t
+    return float(best_t)
+
+
 def split_line_words(
     binv: np.ndarray,
     x: int,
@@ -341,7 +362,7 @@ def split_line_words(
     h: int,
     xh: float,
     drop_frac: float = 0.80,
-    run_frac: float = 0.45,
+    run_frac: float = 0.70,
     empty_run_frac: float = 0.22,
     min_word_frac: float = 0.55,
     col_min_ink: int = 2,
@@ -366,14 +387,23 @@ def split_line_words(
     top[~band.any(0)] = bh  # ...so mark empty columns as "low" (contour at baseline)
     top = _smooth(top, max(3, round(0.05 * xh) | 1))
     low = (~occupied) | (top >= drop_frac * bh)
-    run_w, empty_w = max(3, round(run_frac * xh)), max(2, round(empty_run_frac * xh))
-    cuts = []
+    # candidate boundaries = interior low-contour runs with ink on both sides
+    cands = []  # (center, width)
     for a, b in _runs(low):
-        if a == 0 or b >= bw:
-            continue  # only interior runs split words
-        need = empty_w if not occupied[a:b].any() else run_w
-        if (b - a) >= need and occupied[:a].any() and occupied[b:].any():
-            cuts.append((a + b) // 2)
+        if a == 0 or b >= bw or not (occupied[:a].any() and occupied[b:].any()):
+            continue
+        cands.append(((a + b) // 2, b - a))
+    floor = 0.35 * xh  # absolute min: never cut at a dip narrower than this (intra-letter)
+    if not cands:
+        cuts = []
+    else:
+        widths = [wd for _, wd in cands]
+        # ADAPTIVE per-line threshold: Otsu splits this line's narrow inter-letter dips
+        # from its wider inter-word gaps, so it self-calibrates to the line's own
+        # spacing instead of a hand-tuned constant. run_frac is only the single-gap
+        # fallback (no distribution to split).
+        thr = max(floor, _otsu_threshold(widths)) if len(set(widths)) > 1 else run_frac * xh
+        cuts = [c for c, wd in cands if wd >= thr]
     ink = np.where(occupied)[0]
     if ink.size == 0:
         return []
@@ -422,8 +452,8 @@ def segment_page(rgb: np.ndarray) -> list[dict]:
     shapes = []
     for lx, ly, lw, lh in detect_lines(binv, xh):
         for x, y, w, h in split_line_words(binv, lx, ly, lw, lh, xh):
-            if (w > 5.0 * xh and h < 0.45 * xh) or w < 0.18 * xh or h < 0.18 * xh:
-                continue  # drop rule-like and speck boxes
+            if (w > 5.0 * xh and h < 0.45 * xh) or w < 0.22 * xh or h < 0.22 * xh:
+                continue  # drop rule-like and sliver/speck boxes
             poly = word_polygon(binv, x, y, w, h)
             if not poly:
                 continue
