@@ -210,30 +210,26 @@ def _column_blocks(binv: np.ndarray, xh: float) -> list[tuple[int, int]]:
         blocks = [(0, w)]
 
     def gutter_cut(x0: int, x1: int) -> int | None:
-        """Deepest smoothed-colsum minimum in the central third, if it's a real valley."""
+        """Center-third colsum minimum, but only if it is a PROMINENT valley versus
+        the text on each side -- i.e. a real two-up binding gutter. A single page
+        (text spans the full width) has no such dip, so it is never split."""
         bw = x1 - x0
         c0, c1 = x0 + bw // 3, x0 + 2 * bw // 3
         if c1 - c0 < 1:
             return None
-        seg = sm[c0:c1]
-        cut = c0 + int(np.argmin(seg))
-        med = float(np.median(colsum[x0:x1]))
-        if med > 0 and sm[cut] < 0.5 * med:
-            return cut
-        return None
+        cut = c0 + int(np.argmin(sm[c0:c1]))
+        sides = np.concatenate([sm[x0:c0], sm[c1:x1]])
+        side = float(np.median(sides)) if sides.size else 0.0
+        return cut if side > 0 and sm[cut] < 0.35 * side else None
 
-    # two-up split: any block spanning both pages -> cut at the binding gutter. The
-    # printed margin can survive as its own thin block, so don't gate on a single block.
+    # two-up split: a full-width block with a real central gutter valley -> two pages.
     out = []
     for x0, x1 in blocks:
-        if (x1 - x0) > 0.55 * w:
-            cut = gutter_cut(x0, x1)
-            if cut is None and (x1 - x0) > 0.6 * w:
-                cut = x0 + (x1 - x0) // 2  # acceptance guard: force the cut
-            if cut is not None:
-                out.extend([(x0, cut), (cut, x1)])
-                continue
-        out.append((x0, x1))
+        cut = gutter_cut(x0, x1) if (x1 - x0) > 0.55 * w else None
+        if cut is not None:
+            out.extend([(x0, cut), (cut, x1)])
+        else:
+            out.append((x0, x1))
     out.sort(key=lambda b: b[0])
     return out
 
