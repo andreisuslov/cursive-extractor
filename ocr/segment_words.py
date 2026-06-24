@@ -382,11 +382,17 @@ def split_line_words(
     if bw < 2 or bh < 2:
         return [(x, y, w, h)]
     band[(band.sum(1) / bw) > 0.55, :] = False  # drop residual full-width rule rows
-    occupied = band.sum(0) >= col_min_ink
+    col_ink = band.sum(0)
+    occupied = col_ink >= col_min_ink
     top = band.argmax(0).astype(np.float64)  # first ink row per column (0 if none...)
     top[~band.any(0)] = bh  # ...so mark empty columns as "low" (contour at baseline)
     top = _smooth(top, max(3, round(0.05 * xh) | 1))
-    low = (~occupied) | (top >= drop_frac * bh)
+    # boundary columns: the top contour drops toward baseline (no tall letter) OR the
+    # column is a THIN connecting stroke (few ink px) -- catches words that connect at
+    # the same height (no contour drop) but through a single thin ligature.
+    occ_med = float(np.median(col_ink[occupied])) if occupied.any() else 0.0
+    thin = (col_ink > 0) & (col_ink <= 0.30 * occ_med)
+    low = (~occupied) | (top >= drop_frac * bh) | thin
     # candidate boundaries = interior low-contour runs with ink on both sides
     cands = []  # (center, width)
     for a, b in _runs(low):
@@ -441,27 +447,102 @@ def split_line_words(
     return out
 
 
+def _components(binv: np.ndarray, xh: float) -> list[tuple[int, int, int, int]]:
+    """Ink connected-component boxes (x, y, w, h), dropping specks and page-huge blobs."""
+    n, _, st, _ = cv2.connectedComponentsWithStats((binv > 0).astype(np.uint8), 8)
+    return [
+        (int(st[i, 0]), int(st[i, 1]), int(st[i, 2]), int(st[i, 3]))
+        for i in range(1, n)
+        if 0.04 * xh * xh < st[i, 4] < 60 * xh * xh
+    ]
+
+
+def _word_hull(
+    binv: np.ndarray, x0: int, y0: int, x1: int, y1: int
+) -> list[tuple[int, int]] | None:
+    """Convex hull (simplified) of the ink in a word box -- a tight outline that hugs
+    the word like a hand-drawn shape, rather than an axis-aligned rectangle."""
+    ys, xs = np.nonzero(binv[y0:y1, x0:x1] > 0)
+    if len(xs) < 3:
+        return None
+    pts = np.column_stack([xs + x0, ys + y0]).astype(np.int32)
+    hull = cv2.convexHull(pts)
+    hull = cv2.approxPolyDP(hull, 0.01 * cv2.arcLength(hull, True), True).reshape(-1, 2)
+    return [(int(px), int(py)) for px, py in hull]
+
+
+def group_line_words(
+    binv: np.ndarray,
+    comps: list,
+    lx: int,
+    ly: int,
+    lw: int,
+    lh: int,
+    xh: float,
+    gap_mult: float = 0.7,
+) -> list[tuple[int, int, int, int]]:
+    """Group a line's ink COMPONENTS into words: sort left-to-right, merge a component
+    into the current word when its gap to the previous is below this line's adaptive
+    (Otsu) word-gap threshold OR it overlaps in x (an i-dot / t-bar / stacked stroke).
+    Returns word boxes (x0, y0, x1, y1). Components are real ink, so boxes sit on the
+    words; the adaptive per-line gap separates inter-letter from inter-word spacing."""
+    cs = sorted(
+        (
+            c
+            for c in comps
+            if ly - 0.3 * xh <= c[1] + c[3] / 2 <= ly + lh + 0.3 * xh
+            and lx - 2 <= c[0] + c[2] / 2 <= lx + lw + 2
+        ),
+        key=lambda c: c[0],
+    )
+    if not cs:
+        return []
+    gaps = [g for i in range(len(cs) - 1) if (g := cs[i + 1][0] - (cs[i][0] + cs[i][2])) > 0]
+    thr = (_otsu_threshold(gaps) if len(gaps) > 1 else 0.5 * xh) * gap_mult
+    thr = max(0.2 * xh, thr)
+    groups = [[cs[0]]]
+    for i in range(1, len(cs)):
+        prev = groups[-1][-1]
+        gap = cs[i][0] - (prev[0] + prev[2])
+        if gap < thr or cs[i][0] < prev[0] + prev[2]:  # close, or x-overlapping (i-dot)
+            groups[-1].append(cs[i])
+        else:
+            groups.append([cs[i]])
+    out = []
+    for g in groups:
+        out.append(
+            (
+                min(c[0] for c in g),
+                min(c[1] for c in g),
+                max(c[0] + c[2] for c in g),
+                max(c[1] + c[3] for c in g),
+            )
+        )
+    return out
+
+
 def segment_page(rgb: np.ndarray) -> list[dict]:
     """Return word shapes [{text:'', box_2d, polygon}, ...] in reading order, 0-1000.
 
-    Deterministic: detect lines, then split each line into words by upper-contour
-    drop, then a tight polygon per word."""
+    Deterministic: detect lines, group each line's ink COMPONENTS into words by an
+    adaptive per-line gap, and hug each word with a convex hull. Component-based, so
+    boxes sit on the actual ink instead of a clipped band."""
     H, W = rgb.shape[:2]
     binv = remove_rules(extract_ink(rgb))
     xh = median_xheight(binv)
+    comps = _components(binv, xh)
     shapes = []
     for lx, ly, lw, lh in detect_lines(binv, xh):
-        for x, y, w, h in split_line_words(binv, lx, ly, lw, lh, xh):
+        for x0, y0, x1, y1 in group_line_words(binv, comps, lx, ly, lw, lh, xh):
+            w, h = x1 - x0, y1 - y0
             if (w > 5.0 * xh and h < 0.45 * xh) or w < 0.22 * xh or h < 0.22 * xh:
                 continue  # drop rule-like and sliver/speck boxes
-            poly = word_polygon(binv, x, y, w, h)
-            if not poly:
+            hull = _word_hull(binv, x0, y0, x1, y1)
+            if not hull:
                 continue
-            xs = [p[0] for p in poly]
-            ys = [p[1] for p in poly]
-            box = [_q(min(ys), H), _q(min(xs), W), _q(max(ys), H), _q(max(xs), W)]
+            box = [_q(y0, H), _q(x0, W), _q(y1, H), _q(x1, W)]
             shapes.append(
-                {"text": "", "box_2d": box, "polygon": [[_q(px, W), _q(py, H)] for px, py in poly]}
+                {"text": "", "box_2d": box, "polygon": [[_q(px, W), _q(py, H)] for px, py in hull]}
             )
     return shapes
 
