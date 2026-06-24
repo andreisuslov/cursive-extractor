@@ -54,7 +54,25 @@ def extract_ink(rgb: np.ndarray, paper_k: int = 25) -> np.ndarray:
     d = cv2.GaussianBlur(d, (3, 3), 0)
     binv = cv2.threshold(d, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    return cv2.morphologyEx(binv, cv2.MORPH_CLOSE, close)
+    binv = cv2.morphologyEx(binv, cv2.MORPH_CLOSE, close)
+    binv[~page_mask(rgb)] = 0  # drop "ink" off the paper (desk / binding background)
+    return binv
+
+
+def page_mask(rgb: np.ndarray) -> np.ndarray:
+    """Boolean mask of the bright cream PAGE area, excluding the dark desk/binding
+    background a scan often includes (otherwise its texture reads as ink)."""
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    bright = ((hsv[:, :, 2] > 140) & (hsv[:, :, 1] < 90)).astype(np.uint8) * 255
+    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((25, 25), np.uint8))
+    bright = cv2.morphologyEx(bright, cv2.MORPH_OPEN, np.ones((15, 15), np.uint8))
+    n, lab, st, _ = cv2.connectedComponentsWithStats(bright, 8)
+    h, w = rgb.shape[:2]
+    keep = np.zeros((h, w), bool)
+    for i in range(1, n):
+        if st[i, 4] > 0.05 * h * w:  # the page(s): large bright regions
+            keep |= lab == i
+    return keep if keep.any() else np.ones((h, w), bool)
 
 
 def remove_rules(binv: np.ndarray, frac: float = 0.40) -> np.ndarray:
