@@ -521,22 +521,53 @@ def group_line_words(
     return out
 
 
+def _neck_split(
+    binv: np.ndarray, x0: int, y0: int, x1: int, y1: int, xh: float, medw: float, depth: int = 0
+) -> list[tuple[int, int, int, int]]:
+    """Split a too-wide word box (two words joined by a thin ligature) at the thinnest
+    interior ink column, recursively. ``medw`` is the page's median word width; only
+    boxes wider than 1.7x it are considered, and only a genuinely thin neck (< 0.45x
+    the box's median column ink) actually cuts -- so normal words are left intact."""
+    w = x1 - x0
+    if depth > 4 or w <= 1.7 * medw:
+        return [(x0, y0, x1, y1)]
+    col = _smooth((binv[y0:y1, x0:x1] > 0).sum(0).astype(np.float64), max(3, round(0.3 * xh) | 1))
+    m = max(2, round(0.45 * medw))  # don't cut near the box edges (inside a glyph)
+    if w - 2 * m < 1:
+        return [(x0, y0, x1, y1)]
+    cut = m + int(np.argmin(col[m : w - m]))
+    occ = col[col > 0]
+    if occ.size and col[cut] < 0.45 * float(np.median(occ)):
+        cx = x0 + cut
+        left = _neck_split(binv, x0, y0, cx, y1, xh, medw, depth + 1)
+        right = _neck_split(binv, cx, y0, x1, y1, xh, medw, depth + 1)
+        return left + right
+    return [(x0, y0, x1, y1)]
+
+
 def segment_page(rgb: np.ndarray) -> list[dict]:
     """Return word shapes [{text:'', box_2d, polygon}, ...] in reading order, 0-1000.
 
     Deterministic: detect lines, group each line's ink COMPONENTS into words by an
-    adaptive per-line gap, and hug each word with a convex hull. Component-based, so
-    boxes sit on the actual ink instead of a clipped band."""
+    adaptive per-line gap, neck-split any box that merged two words, and hug each word
+    with a convex hull. Component-based, so boxes sit on the actual ink."""
     H, W = rgb.shape[:2]
     binv = remove_rules(extract_ink(rgb))
     xh = median_xheight(binv)
     comps = _components(binv, xh)
+    raw = []
+    for line in detect_lines(binv, xh):
+        raw.extend(group_line_words(binv, comps, *line, xh))
+    medw = float(np.median([b[2] - b[0] for b in raw])) if raw else xh
     shapes = []
-    for lx, ly, lw, lh in detect_lines(binv, xh):
-        for x0, y0, x1, y1 in group_line_words(binv, comps, lx, ly, lw, lh, xh):
+    for b in raw:
+        for x0, y0, x1, y1 in _neck_split(binv, *b, xh, medw):
             w, h = x1 - x0, y1 - y0
             if (w > 5.0 * xh and h < 0.45 * xh) or w < 0.22 * xh or h < 0.22 * xh:
                 continue  # drop rule-like and sliver/speck boxes
+            rows = np.where((binv[y0:y1, x0:x1] > 0).any(1))[0]  # retighten y after a split
+            if rows.size:
+                y0, y1 = y0 + int(rows[0]), y0 + int(rows[-1]) + 1
             hull = _word_hull(binv, x0, y0, x1, y1)
             if not hull:
                 continue
