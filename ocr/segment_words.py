@@ -188,12 +188,130 @@ def split_words_in_blob(
     return [(x + a, y, b - a, h) for a, b in merged if b - a >= 0.4 * xh]
 
 
+def _smooth(v: np.ndarray, k: int) -> np.ndarray:
+    """Box-filter smooth a 1-D projection with an odd window >= 1."""
+    k = max(1, k | 1)
+    return np.convolve(v.astype(np.float64), np.ones(k) / k, mode="same")
+
+
+def _column_blocks(binv: np.ndarray, xh: float) -> list[tuple[int, int]]:
+    """Page COLUMN blocks (x-ranges) for a two-up scan: left page, right page (or a
+    single block). Vertical ink projection -> on-columns -> contiguous runs, with an
+    explicit gutter cut so a faint binding valley still separates the two pages."""
+    w = binv.shape[1]
+    colsum = (binv > 0).sum(0).astype(np.float64)
+    sm = _smooth(colsum, max(9, round(2 * xh)))
+    if sm.max() <= 0:
+        return [(0, w)]
+    absfloor = 0.5 * xh  # ink rows per column below this is faint-edge noise
+    thr = max(0.10 * sm.max(), absfloor)
+    blocks = [(a, b) for a, b in _runs(sm > thr) if (b - a) >= 3 * xh]
+    if not blocks:
+        blocks = [(0, w)]
+
+    def gutter_cut(x0: int, x1: int) -> int | None:
+        """Deepest smoothed-colsum minimum in the central third, if it's a real valley."""
+        bw = x1 - x0
+        c0, c1 = x0 + bw // 3, x0 + 2 * bw // 3
+        if c1 - c0 < 1:
+            return None
+        seg = sm[c0:c1]
+        cut = c0 + int(np.argmin(seg))
+        med = float(np.median(colsum[x0:x1]))
+        if med > 0 and sm[cut] < 0.5 * med:
+            return cut
+        return None
+
+    # two-up split: any block spanning both pages -> cut at the binding gutter. The
+    # printed margin can survive as its own thin block, so don't gate on a single block.
+    out = []
+    for x0, x1 in blocks:
+        if (x1 - x0) > 0.55 * w:
+            cut = gutter_cut(x0, x1)
+            if cut is None and (x1 - x0) > 0.6 * w:
+                cut = x0 + (x1 - x0) // 2  # acceptance guard: force the cut
+            if cut is not None:
+                out.extend([(x0, cut), (cut, x1)])
+                continue
+        out.append((x0, x1))
+    out.sort(key=lambda b: b[0])
+    return out
+
+
+def _deepest_valley(rowsum: np.ndarray, y0: int, y1: int, xh: float) -> int | None:
+    """Index of the deepest interior valley in rowsum[y0:y1] if it's a real inter-line
+    gap, else None. A band must be tall enough to plausibly hold two lines, and the
+    valley must dip below the band peak (measured inter-line valleys here sit at ~0.2-0.4
+    of the peak; descender/x-height dips within one line stay higher). A band that is
+    clearly too tall to be a single line (> 2.2*xh) is forced to split at its deepest
+    interior dip even when shallow -- it is a merged line by construction."""
+    if (y1 - y0) < 1.5 * xh:  # too thin to contain two text lines
+        return None
+    seg = _smooth(rowsum[y0:y1], max(3, round(0.3 * xh)))
+    margin = max(1, round(0.5 * xh))  # never cut inside a glyph at the band edges
+    if 2 * margin >= len(seg) or seg.max() <= 0:
+        return None
+    interior = seg[margin : len(seg) - margin]
+    cut = margin + int(np.argmin(interior))
+    too_tall = (y1 - y0) > 2.2 * xh  # cannot be one line -> must contain a merge
+    thr = 0.85 if too_tall else 0.5
+    if seg[cut] >= thr * seg.max():  # not a deep enough valley
+        return None
+    return y0 + cut
+
+
+def _split_band(rowsum: np.ndarray, y0: int, y1: int, xh: float, depth: int = 0):
+    """Split a row band into single-line sub-bands at deep interior valleys. A too-tall
+    band is several merged lines; recurse on each half (each accepted cut strictly
+    shrinks the band, so the no-valley guard guarantees termination -- the depth cap is
+    only a paranoia backstop). Probe for a valley regardless of band height so that even
+    a short two-line band (both lines short) is split when it has a clear interior gap."""
+    yc = _deepest_valley(rowsum, y0, y1, xh) if depth < 40 else None
+    if yc is None or yc <= y0 or yc >= y1:
+        return [(y0, y1)]
+    return _split_band(rowsum, y0, yc, xh, depth + 1) + _split_band(rowsum, yc, y1, xh, depth + 1)
+
+
+def _line_bands(binv: np.ndarray, x0: int, x1: int, xh: float) -> list[tuple[int, int, int, int]]:
+    """LINE boxes (x, y, w, h) inside one column block, top-to-bottom. Horizontal
+    row-projection -> on-rows -> bands; split tall bands; tighten x to actual ink."""
+    blk = binv[:, x0:x1]
+    rowsum = (blk > 0).sum(1).astype(np.float64)
+    sm = _smooth(rowsum, max(3, round(0.3 * xh)))
+    if sm.max() <= 0:
+        return []
+    absfloor = 0.5 * xh  # ink pixels per row below this is noise
+    on = sm > max(0.06 * sm.max(), absfloor)
+    bands = [(a, b) for a, b in _runs(on) if (b - a) >= 0.4 * xh]
+    sub = []
+    for a, b in bands:
+        sub.extend(_split_band(rowsum, a, b, xh))
+    out = []
+    for a, b in sub:
+        if (b - a) < 0.4 * xh:
+            continue
+        col = (blk[a:b, :] > 0).sum(0)  # tighten x to this band's ink columns
+        ink = np.nonzero(col > max(1, round(0.05 * xh)))[0]
+        if len(ink) == 0:
+            continue
+        bx0, bx1 = x0 + int(ink[0]), x0 + int(ink[-1]) + 1
+        out.append((bx0, a, bx1 - bx0, b - a))
+    return out
+
+
 def detect_lines(binv: np.ndarray, xh: float) -> list[tuple[int, int, int, int]]:
-    """Text-line blobs (x, y, w, h) in reading order -- RLSA with a wide horizontal
-    kernel so a whole line merges, never across lines."""
-    lines = word_blobs(binv, xh, gap_frac=1.5)
-    lines.sort(key=lambda b: (round((b[1] + b[3] / 2) / (1.3 * xh)), b[0]))
-    return lines
+    """Text-line boxes (x, y, w, h) in reading order, for a two-up (or single) scan
+    with horizontal baselines (no deskew). Find page COLUMN blocks by vertical ink
+    projection (with an explicit binding-gutter cut), then LINE bands inside each
+    block by horizontal row projection (splitting any merged-line band). Reading
+    order = left page top-to-bottom, then right page."""
+    blocks = _column_blocks(binv, xh)
+    lines = []
+    for bi, (x0, x1) in enumerate(blocks):
+        for box in _line_bands(binv, x0, x1, xh):
+            lines.append((bi, box))
+    lines.sort(key=lambda t: (t[0], t[1][1]))  # block index, then band top y
+    return [box for _, box in lines]
 
 
 def split_line_n(
@@ -241,6 +359,15 @@ def segment_page(rgb: np.ndarray) -> list[dict]:
             {"text": "", "box_2d": box, "polygon": [[_q(px, W), _q(py, H)] for px, py in poly]}
         )
     return shapes
+
+
+def draw_line_boxes(rgb: np.ndarray, boxes: list[tuple[int, int, int, int]]) -> Image.Image:
+    """Draw (x, y, w, h) line boxes (page pixels) as rectangles, for debugging."""
+    im = Image.fromarray(rgb).convert("RGB")
+    d = ImageDraw.Draw(im)
+    for x, y, w, h in boxes:
+        d.rectangle([x, y, x + w, y + h], outline=(230, 20, 20), width=3)
+    return im
 
 
 def draw_overlay(rgb: np.ndarray, shapes: list[dict]) -> Image.Image:
