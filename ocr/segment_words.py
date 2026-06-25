@@ -554,6 +554,18 @@ def _neck_split(
     return [(x0, y0, x1, y1)]
 
 
+def _box_overlaps(a: list, b: list, iou_thr: float = 0.45, contain_thr: float = 0.65) -> bool:
+    """True if box ``a`` overlaps ``b`` enough to be a duplicate -- IoU above ``iou_thr``
+    or one box >``contain_thr`` inside the other. box format [ymin,xmin,ymax,xmax]."""
+    ay0, ax0, ay1, ax1 = a
+    by0, bx0, by1, bx1 = b
+    inter = max(0, min(ax1, bx1) - max(ax0, bx0)) * max(0, min(ay1, by1) - max(ay0, by0))
+    if inter <= 0:
+        return False
+    aa, bb = (ax1 - ax0) * (ay1 - ay0), (bx1 - bx0) * (by1 - by0)
+    return inter / (aa + bb - inter) > iou_thr or inter / max(1, min(aa, bb)) > contain_thr
+
+
 def segment_page(rgb: np.ndarray) -> list[dict]:
     """Return word shapes [{text:'', box_2d, polygon}, ...] in reading order, 0-1000.
 
@@ -568,7 +580,7 @@ def segment_page(rgb: np.ndarray) -> list[dict]:
     for line in detect_lines(binv, xh):
         raw.extend(group_line_words(binv, comps, *line, xh))
     medw = float(np.median([b[2] - b[0] for b in raw])) if raw else xh
-    shapes = []
+    cands = []  # (fill, box_2d, shape) -- collect, then dedupe overlaps
     for b in raw:
         for x0, y0, x1, y1 in _neck_split(binv, *b, xh, medw):
             w, h = x1 - x0, y1 - y0
@@ -577,18 +589,31 @@ def segment_page(rgb: np.ndarray) -> list[dict]:
             rows = np.where((binv[y0:y1, x0:x1] > 0).any(1))[0]  # retighten y after a split
             if rows.size:
                 y0, y1 = y0 + int(rows[0]), y0 + int(rows[-1]) + 1
-            # drop sparse wide junk (a ruled line is a thin stroke across a wide box)
-            if (x1 - x0) > 2 * xh:
-                fill = float((binv[y0:y1, x0:x1] > 0).sum()) / max(1, (x1 - x0) * (y1 - y0))
-                if fill < 0.06:
-                    continue
+            fill = float((binv[y0:y1, x0:x1] > 0).sum()) / max(1, (x1 - x0) * (y1 - y0))
+            if (x1 - x0) > 2 * xh and fill < 0.06:
+                continue  # sparse wide junk (a ruled line)
             hull = _word_hull(binv, x0, y0, x1, y1, xh)
             if not hull:
                 continue
             box = [_q(y0, H), _q(x0, W), _q(y1, H), _q(x1, W)]
-            shapes.append(
-                {"text": "", "box_2d": box, "polygon": [[_q(px, W), _q(py, H)] for px, py in hull]}
-            )
+            sh = {"text": "", "box_2d": box, "polygon": [[_q(px, W), _q(py, H)] for px, py in hull]}
+            cands.append((fill, box, sh))
+    # dedupe: overlapping line bands (esp. the header) can segment one word twice --
+    # keep the tighter (higher-fill) box, drop boxes that overlap or sit inside it.
+    cands.sort(key=lambda c: -c[0])
+    kept = []
+    for _fill, box, sh in cands:
+        if any(_box_overlaps(box, kb) for kb in kept):
+            continue
+        kept.append(box)
+        sh["_box"] = box
+    shapes = [c[2] for c in cands if "_box" in c[2]]
+    lineh = max(1.0, 1.3 * xh / H * 1000)
+    shapes.sort(
+        key=lambda s: (round((s["box_2d"][0] + s["box_2d"][2]) / 2 / lineh), s["box_2d"][1])
+    )
+    for s in shapes:
+        s.pop("_box", None)
     return shapes
 
 
