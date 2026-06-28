@@ -9,6 +9,40 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 — InkSight probe: DECISIVE POSITIVE — it derenders diary ink cleanly
+
+Ran InkSight Small-p (released Apache-2.0 weights, `tf.saved_model`) directly on 6 real,
+faded diary word-crops (`box.jpg`), bypassing our entire tracer. **Result: it works, and
+well.** The recovered ink traces the actual handwriting as smooth, well-ordered connected
+cursive — real letterforms following sensible left-to-right pen motion — on historical ink
+*with ruled lines and neighbor words present*. Night-and-day vs. our tracer's angular
+zig-zag. This answers the survey's make-or-break domain-gap question: **a learned derenderer
+generalizes to 19th-20th-c. diary ink off-the-shelf, zero fine-tuning.**
+
+Details: 9–17 strokes/word (plausible); ~290 s/crop on this CPU Mac (fine for offline
+dataset building, not interactive — batch on a GPU to scale). The model's *text recognition*
+output was garbage ("John"→"khook-you") but irrelevant — we only use the ink. Setup that
+worked: `uv venv --python 3.11`, `tensorflow==2.17.0` + `tensorflow-text==2.17.0` (arm64
+wheel exists), `small-p-cpu.zip` from GCS, prompt "Recognize and derender." (fallback
+"Derender the ink."). Reproducible recipe saved at `ocr/experiments/_inksight_probe.py`;
+probe image at `ocr/experiments/inksight_probe_6.png`.
+
+**Remaining issue (now the real one): crop tightness.** InkSight traces *whatever ink is in
+the 224-crop*, so our over-capturing crops ("Uncle" → "Uncle Joh") make it trace neighbors
+too. So the bottleneck moves from *stroke recovery* (solved by InkSight) to *clean
+single-word crops* (segmentation) — or run InkSight at page level and split the resulting
+ink by word.
+
+**Decision / path forward:**
+1. Replace `ocr/vectorize.py`'s tracer output with InkSight-derendered ink as the stroke
+   source for the dataset.
+2. Tighten crops to one word each (or page-level derender + split) so the ink is the target
+   word only.
+3. Rebuild a small `diarybank-v2` from InkSight ink, retrain the generator, and re-validate
+   legibility directly. This is the first version with a real shot at legible output.
+
+---
+
 ## 2026-06-28 — Data-quality autopsy: the strokes don't match the labels (plan revision)
 
 Before building any trajectory recovery, inspected the actual `diarybank` training data
