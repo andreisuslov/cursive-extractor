@@ -70,6 +70,23 @@ FONT_PATHS = [
     "/System/Library/Fonts/ChalkboardSE.ttc",
 ]
 
+def font_bank(paths: list[str] = FONT_PATHS) -> list[str]:
+    """The usable fonts from ``paths`` (those that exist), falling back to matplotlib's
+    bundled DejaVuSans when none are present -- so the recognizer still renders on Linux/CI
+    where the macOS cursive fonts are absent (otherwise the template bank is empty and every
+    glyph query fails). On macOS the cursive fonts are present, so the fallback never fires.
+    """
+    present = [p for p in paths if os.path.exists(p)]
+    if present:
+        return present
+    try:
+        from matplotlib import font_manager
+
+        return [font_manager.findfont("DejaVu Sans")]  # ships with matplotlib (a dep)
+    except Exception:
+        return paths  # last resort: render_glyph will skip unloadable paths
+
+
 DESC_SIZE = 24  # descriptor canvas side (px)
 DESC_BLUR = 1.2  # gaussian sigma for the descriptor (tolerates small shape variance)
 
@@ -129,6 +146,7 @@ class LetterRecognizer:
     def __init__(self, font_paths: list[str] = FONT_PATHS, size: int = DESC_SIZE):
         self.size = size
         self.templates: dict[str, np.ndarray] = {}
+        font_paths = font_bank(font_paths)
         for c in CHARS:
             descs = [
                 d
