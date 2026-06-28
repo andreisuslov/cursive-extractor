@@ -185,6 +185,29 @@ def whiten_outside_polygon(
     return gray
 
 
+def box_mask_polygon(
+    box_2d: list[int],
+    hpad_frac: float = 0.15,
+    vpad_up_frac: float = 0.45,
+    vpad_dn_frac: float = 0.40,
+) -> list[list[float]]:
+    """A rectangle polygon (0-1000 page coords) = the detection ``box_2d`` padded
+    vertically for ascenders/descenders and horizontally by a small slack.
+
+    Used to whiten neighbour ink that bleeds into a crop rectangle in dense cursive,
+    isolating one word. The vertical pad is generous (tall letters / descenders);
+    the horizontal pad is tight (the box is already snug on width, so we cut the
+    ligature into the next word rather than capture it). ``box_2d`` is
+    ``[ymin, xmin, ymax, xmax]``.
+    """
+    ymin, xmin, ymax, xmax = box_2d
+    bh = max(1, ymax - ymin)
+    hp, vu, vd = hpad_frac * bh, vpad_up_frac * bh, vpad_dn_frac * bh
+    x0, x1 = xmin - hp, xmax + hp
+    y0, y1 = ymin - vu, ymax + vd
+    return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+
+
 def crop_to_box(
     page_image: Image.Image,
     box_2d: list[int],
@@ -192,19 +215,28 @@ def crop_to_box(
     pad_frac: float = 0.0,
     fit_ink: bool = False,
     polygon: list | None = None,
+    mask_to_box: bool = False,
+    mask_hpad: float = 0.15,
+    mask_vpad_up: float = 0.45,
+    mask_vpad_dn: float = 0.40,
 ) -> tuple[Image.Image, tuple[int, int, int, int]]:
     """Crop ``page_image`` to ``box_2d``. Returns ``(crop, (left,top,right,bottom))``.
 
     With ``fit_ink=True`` the crop is fitted to the word's own ink components so
     no letter strokes are clipped and neighbours are excluded (see
     ``fit_crop_to_ink``). With ``polygon`` (0-1000 page coords) the crop's ink
-    outside that hand-drawn outline is whitened, isolating an irregular word.
+    outside that hand-drawn outline is whitened, isolating an irregular word. With
+    ``mask_to_box=True`` (and no explicit ``polygon``) the crop's ink is whitened
+    outside the padded detection box (``box_mask_polygon``) -- isolating one word
+    when the crop rectangle overlaps neighbours in dense cursive.
     """
     if fit_ink:
         crop_box = fit_crop_to_ink(page_image, box_2d, padding, pad_frac)
     else:
         width, height = page_image.size
         crop_box = box_to_crop_box(box_2d, width, height, padding, pad_frac)
+    if polygon is None and mask_to_box:
+        polygon = box_mask_polygon(box_2d, mask_hpad, mask_vpad_up, mask_vpad_dn)
     crop = page_image.crop(crop_box)
     if polygon:
         arr = whiten_outside_polygon(

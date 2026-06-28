@@ -9,6 +9,30 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 — Crop tightening (mask-to-box) so derendering sees ONE word
+
+InkSight traces *all* ink in a crop, so our over-capturing crops made it derender neighbours
+too ("Uncle" crop → "Uncle Joh"). Worked the fix:
+
+- **Horizontal clamp** (symmetric to the existing vertical clamp in `fit_crop_to_ink`):
+  helped (Uncle 327→255 px) but **insufficient** — in dense diary cursive any rectangle around
+  a word still catches its neighbours above/below/beside.
+- **Mask-to-box** (the fix): whiten all ink outside the detection box, padded vertically for
+  ascenders/descenders and tightly horizontally. Re-ran InkSight on masked crops: **"Uncle"
+  now derenders as just "Uncle"** (neighbour gone), "Aunt" clean. Residual minor **vertical**
+  bleed ("John" still catches an "eet-" sliver from the line below) in tight line-spacing.
+
+**Integrated (opt-in, no regression):** `config.CROP_MASK_TO_BOX` (+ `CROP_MASK_HPAD/VPAD_UP/
+VPAD_DN`), `pdf_utils.box_mask_polygon` + `crop_to_box(mask_to_box=...)` reusing the existing
+`whiten_outside_polygon` path, `crop.py` wiring + `--mask-to-box` CLI flag, and a unit test.
+Off by default so existing crop/overlay outputs + tests are unchanged. **160 tests pass, ruff
+clean.** Enable with `OCR_CROP_MASK_TO_BOX=1`. Evidence: `ocr/experiments/inksight_masked_clean.png`.
+
+**Next:** connected-component-aware masking (keep only ink connected to in-box ink) to kill
+the vertical sliver; then wire InkSight in as the vectorizer and rebuild `diarybank-v2`.
+
+---
+
 ## 2026-06-28 — InkSight probe: DECISIVE POSITIVE — it derenders diary ink cleanly
 
 Ran InkSight Small-p (released Apache-2.0 weights, `tf.saved_model`) directly on 6 real,

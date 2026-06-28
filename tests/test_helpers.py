@@ -147,3 +147,23 @@ def test_crop_box_image_missing_box_raises(monkeypatch):
     monkeypatch.setattr(crop, "load_page", lambda *a, **k: _synthetic_page())
     with pytest.raises(ValueError, match="box_2d"):
         crop.crop_box_image("fake.pdf", [{"text": "x"}], 0, 0)
+
+
+def test_crop_mask_to_box_whitens_neighbour(monkeypatch):
+    # Page with a target word and a separate neighbour word to its right.
+    arr = np.full((300, 300), 255, np.uint8)
+    arr[120:150, 80:160] = 0  # target ink
+    arr[120:150, 180:240] = 0  # neighbour ink (outside the target box)
+    page = Image.fromarray(arr).convert("RGB")
+    monkeypatch.setattr(crop, "load_page", lambda *a, **k: page)
+    boxes = [{"box_2d": [400, 267, 500, 533], "text": "target"}]  # 0-1000, snug on target
+    # Large pad_frac makes the crop rectangle include the neighbour, so masking has work to do.
+    plain, _ = crop.crop_box_image(
+        "f.pdf", boxes, 0, 0, dpi=100, pad_frac=1.0, fit_ink=False, mask_to_box=False
+    )
+    masked, _ = crop.crop_box_image(
+        "f.pdf", boxes, 0, 0, dpi=100, pad_frac=1.0, fit_ink=False, mask_to_box=True
+    )
+    pa, ma = np.array(plain.convert("L")), np.array(masked.convert("L"))
+    assert ma.min() == 0  # target ink kept
+    assert (ma < 128).sum() < (pa < 128).sum()  # neighbour ink whitened out

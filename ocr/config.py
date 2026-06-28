@@ -46,6 +46,15 @@ CROP_FIT_INK = _env_bool("OCR_CROP_FIT_INK")
 # keep only the target word's ink (drop neighbouring words/lines). See
 # vectorize.clean_word. Disable with OCR_CROP_CLEAN=0.
 CROP_CLEAN = _env_bool("OCR_CROP_CLEAN")
+# Mask each crop's ink to the detection box: whiten ink outside the box (padded for
+# ascenders/descenders + a small horizontal slack), so a crop rectangle that overlaps
+# neighbouring words/rows in dense cursive yields ONLY the target word's ink. Critical
+# for derendering (InkSight traces all ink in the crop). Opt-in (off by default so the
+# existing crop/overlay outputs and tests are unchanged): OCR_CROP_MASK_TO_BOX=1.
+CROP_MASK_TO_BOX = _env_bool("OCR_CROP_MASK_TO_BOX", False)
+CROP_MASK_HPAD = float(os.environ.get("OCR_CROP_MASK_HPAD", "0.15"))  # x slack, frac of box height
+CROP_MASK_VPAD_UP = float(os.environ.get("OCR_CROP_MASK_VPAD_UP", "0.45"))  # ascenders
+CROP_MASK_VPAD_DN = float(os.environ.get("OCR_CROP_MASK_VPAD_DN", "0.40"))  # descenders
 
 # The HTML template ships alongside this package.
 HTML_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "handwriting_tool.html")
