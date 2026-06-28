@@ -22,6 +22,15 @@ data*, not a better cut algorithm, as the next lever. The full suite is **147 te
 passing, ruff-clean, with CI on every push/PR, and the whole train+sample loop runs
 W&B-free on an Apple-Silicon laptop.
 
+**Validation update (2026-06-28).** The model was trained end-to-end on the OCR-mined
+`diarybank` data for the first time (20k steps, L40S). It learns layout but produces
+**angular scribble, not letters** — confirming that **stroke-order recovery in
+`ocr/vectorize.py` is the bottleneck**, not the model or the segmentation. Decision-making,
+the run journey, and the trajectory-recovery plan are recorded in `WORKLOG.md`. See M14.
+
+> Companion doc: **`WORKLOG.md`** records the *why* and the *results* (decision-making);
+> this file records the *what-shipped* (implemented changes).
+
 ---
 
 ## M1 — OCR vectorizer stroke-recovery rewrite
@@ -171,3 +180,14 @@ circularity). The result is a clean negative *at the current data scale*, and po
 at the real lever.
 
 - `5b2e3e7` HTR forced-alignment cut scores **4.5–5.6% vs geometry 12–13%** (about half), consistent across seeds; doubling epochs (60 → 120) barely moves it. ~490 words is far too little for HTR (these need thousands+) — the right architecture, the wrong data scale *here*. Motivates the parallel data-scaling effort (scraping more American Diary Project diaries).
+
+## M14 — End-to-end training on diary strokes: the validation that reframed the project
+
+Closed the loop for the first time — trained the generator on the OCR-mined `diarybank`
+data it was always meant to consume — and got the decisive negative that points all future
+work at trajectory recovery. Full reasoning, the RunPod run journey, and the
+trajectory-recovery plan live in `WORKLOG.md` (2026-06-27 / 2026-06-28 entries).
+
+- `train_colab.ipynb` — Colab training harness for `diarybank` (clone private repo via PAT, wandb-only install to dodge Colab's numpy/numba conflict, team W&B entity, small `train_size`/`max_steps` for a fast validation run).
+- **Result (not a code change, recorded for the record):** 20,132-step L40S run produces angular scribble, not cursive; test_loss plateaus at ~1.79 after ~7k steps. **Root cause: stroke-order recovery** (nearest-neighbor `order_points` in `ocr/vectorize.py`) feeds the model wrong pen trajectories. HTR/Transkribus can't help (they output text, not pen paths).
+- **Next (planned, see WORKLOG):** Step 0 smoothness-based graph traversal to replace nearest-neighbor ordering; Step 1 a learned image→sequence recoverer trained on rendered online-handwriting pairs, validated directly by DTW. A deep-research survey of SOTA methods/datasets/code was launched to ground Step 1.
