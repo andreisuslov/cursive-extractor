@@ -9,6 +9,40 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 — Data-quality autopsy: the strokes don't match the labels (plan revision)
+
+Before building any trajectory recovery, inspected the actual `diarybank` training data
+(plotted samples colored by pen-order). Findings:
+
+- **Labels are fine.** `asciiSequence` is 100% single words, correct, and sequential (the
+  first items reconstruct a real diary sentence). The text side is not the problem.
+- **The strokes frequently are NOT the labeled word.** Point count is ~constant ~270/word
+  regardless of length (`"I"` = 265 pts, `"to"` = 310) due to `downsample_points`' fixed
+  target — but rendering the ink shows: some words trace cleanly (`"Church"` reads as
+  Church), many carry a **garbage zig-zag blob** fused to the real word (`"Homick"` = word +
+  scribble prefix), and several (`"to"`, `"Went"`, `"4th"`, `"Mr"`) are **fragmented,
+  scattered pieces that don't read as the word at all.**
+- **Two compounding causes**, not one: (a) the tracer emits dense zig-zag blobs on
+  messy/junction/noisy ink; (b) imperfect crops leak neighbor / ruled-line / speck ink into
+  each word's vectorization. The model was trained on text→stroke pairs where the strokes
+  often don't match the text — which alone explains the scribble output.
+
+**Plan revision.** "Step 0 (smoothness graph traversal)" **already exists** — `ocr/vectorize.py`'s
+`trace_component` does a depth-first walk choosing the straightest continuation at branches,
+plus component chaining (the naive nearest-neighbor was replaced back in M1). So Step 0 is
+not the lever, and it would not fix the crop-contamination half anyway. The bottleneck is
+**training-data stroke quality = {tracer order on messy ink} + {crop contamination}**.
+
+**Decisive next experiment:** run **InkSight** (learned image→ink) directly on the diary
+**crop images** (`box.jpg`), bypassing our entire tracer. If it derenders clean ink from the
+same crops, the path is to replace the vectorizer with a learned recoverer (and the
+crop-contamination still needs the segmentation side). If it also chokes on faded/contaminated
+diary crops, the limiting factor is crop/segmentation quality, and the honest fallback is
+collecting real pen strokes. Either way, validate stroke quality directly — never again only
+through a downstream training run.
+
+---
+
 ## 2026-06-28 — Trajectory recovery: how to seriously attack it
 
 **Context.** The 2026-06-27 validation (below) proved the OCR pipeline's weak point is
