@@ -55,20 +55,39 @@ The OCR/derender/segment/allograph work serves **(B) directly.** The neural tran
 synthesize variants for letters the person didn't write often enough (a single page rarely
 contains every letter ≥3 times), and/or generate connecting strokes.
 
-## Next concrete steps
+## Tracked next steps
 
-1. **Validate stage 3 at scale** — build `diarybank-v2` with the InkSight vectorizer on a
-   GPU; confirm clean strokes for whole pages.
-2. **Re-attack stage 4 on clean strokes** — segment the *InkSight trajectory* into letters
-   (cutting a clean pen path should be far easier than cutting messy ink); label each cut
-   from the known transcription. This is the make-or-break research step.
-3. **Stage 5** — cluster the labelled letters into ≥3 variants per letter (extend the
-   allograph library to the new clean strokes).
-4. **Stage 6 (new) — font backend** — turn variant glyphs into an actual dynamic font
-   (e.g. `fontTools`: outlines → OTF with `calt`/randomized alternates + join handling).
-   Prototype on one well-covered writer first.
-5. **Per-writer coverage** — a dynamic font needs ≥3 samples of *every* glyph; decide how
-   to fill gaps (more pages per writer, or neural synthesis from track A).
+The project backlog. Checked = done; ordered roughly by dependency. Keep this list current
+as items land (the matching detail lives in `WORKLOG.md`).
+
+**Critical path to the goal**
+- [ ] **N1 — Validate stage 3 at scale.** Build `diarybank-v2` with the InkSight vectorizer
+  on a GPU; confirm clean strokes for whole pages (not just probe crops).
+- [ ] **N2 — Re-attack stage 4 on clean strokes (make-or-break).** Segment the *InkSight
+  trajectory* into letters — cutting a clean pen path should beat cutting messy ink — and
+  label each cut from the known transcription. The whole middle hinges on this.
+- [ ] **N3 — Stage 5: variant clustering.** Cluster labelled letters into ≥3 variants per
+  letter; extend the allograph library (M12) to the clean strokes.
+- [ ] **N4 — Stage 6: font backend (new).** Variant glyphs → a real dynamic font
+  (`fontTools`: outlines → OTF with `calt`/randomized alternates + cursive joins). Prototype
+  on one well-covered writer.
+- [ ] **N5 — Stage 7: render text** in the person's hand (type → font with variant rotation
+  + joins). End-to-end demo.
+- [ ] **N6 — Per-writer coverage.** A font needs ≥3 of *every* glyph; one page rarely has
+  that. Decide gap-fill: more pages per writer, or neural synthesis (track A) for rare letters.
+
+**Decisions to make**
+- [ ] **D1 — Font tech:** real OpenType randomized alternates vs a custom SVG/stroke renderer
+  (OpenType = portable; renderer = more flexible for joins). Blocks N4.
+- [ ] **D2 — Keep the neural CursiveTransformer?** Drop it for the stated goal, or keep only
+  as a gap-filler for rare letters (N6).
+
+**Quality / deferred (not on the critical path)**
+- [ ] **Q1 — Thickness in generation.** Data capture done (`--rich`); render-time variable
+  width/opacity is free; model *generating* width/intensity is the deferred lift (new heads).
+  Do after a plain trajectory is confirmed legible. (WORKLOG 2026-06-28.)
+- [ ] **Q2 — Tighten loose two-line detection boxes** (e.g. "John" box dipping into the next
+  row) — upstream fix the mask can't do.
 
 ## Open questions
 
