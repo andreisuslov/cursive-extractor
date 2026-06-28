@@ -9,6 +9,36 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 — Rendering/noise diagnosis + plan; CI rescued
+
+**CI was red from the first push** (newly-created private repo). Three stacked causes, all
+fixed (now green): (1) pre-existing — `test_recognizer` renders glyphs from macOS-only system
+fonts, absent on the Linux runner → added a DejaVuSans fallback (`_recognizer.font_bank`, used
+by both the recognizer and the test helper); (2) a copied recipe script wasn't lint-clean;
+(3) I'd run `ruff check` but not `ruff format`. **Process fix: run `ruff check . && ruff
+format --check . && pytest` (whole repo) before every push, not just changed files.**
+
+**Rendering/noise problems (flat & rich both imperfect). Three distinct causes:**
+- **P1 — neighbour-line ink in the crop:** loose detection boxes + dense cursive bleed bits of
+  the line above/below into the crop.
+- **P2 — wrong connections:** P1's stray ink + InkSight being a holistic tracer that "completes"
+  paths it shouldn't.
+- **P3 — fidelity:** InkSight makes a *plausible* tracing, not a pixel-faithful copy (survey:
+  ~67% look human-traced), so it can miss/add strokes even on a clean crop (e.g. the "Uncle"
+  leading loop was InkSight hallucinating, not crop bleed — the masked crop was clean).
+
+**Obvious fix attempted + self-checked → NEGATIVE (not shipped):** a stricter "keep only
+components mostly inside the box" mask to kill P1. Rendered and inspected it — **worse**: it
+kept *more* neighbour text (the bbox-overlap÷pixel-area metric is ill-posed for sprawling
+cursive components). The existing connected-component mask is at/near the crop-level ceiling.
+
+**Conclusion:** crop-level masking has hit diminishing returns. P1/P2 are really solved by
+**letter-level identification + reassembly** (cut clean strokes into letters → label from the
+known transcript → keep clean per-letter glyphs → reassemble with *chosen* ligatures) — roadmap
+N2→N3→N4 — which also sidesteps P3 (keep good letter *shapes*, not a perfect whole-word trace).
+Progress now needs clean strokes at scale → the GPU run (N1). Note: **W&B is tracking, not a GPU
+provider** (Launch only dispatches to compute you connect); use RunPod for the GPU work.
+
 ## 2026-06-28 — Planned: stroke thickness / faintness (richer than [x,y,pen])
 
 **Gap (raised by the user):** the stroke format `[x, y, pen]` is trajectory-only — it
