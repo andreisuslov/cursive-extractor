@@ -16,8 +16,9 @@ from ocr.experiments import _recognizer as r
 
 
 def _any_glyph(ch: str) -> np.ndarray:
-    """First system-font render of ``ch`` (skips fonts absent on this machine)."""
-    for fp in r.FONT_PATHS:
+    """First render of ``ch`` from the recognizer's font bank (DejaVuSans fallback on
+    machines/CI without the macOS cursive fonts)."""
+    for fp in r.font_bank():
         m = r.render_glyph(ch, fp)
         if m is not None:
             return m
