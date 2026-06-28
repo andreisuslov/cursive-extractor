@@ -9,6 +9,35 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 — Planned: stroke thickness / faintness (richer than [x,y,pen])
+
+**Gap (raised by the user):** the stroke format `[x, y, pen]` is trajectory-only — it
+captures *where the pen went* but not line **thickness** or **faintness** ("weakness"), so
+the rendered output can't convey pen weight. **Neither the skeleton tracer nor InkSight
+emits this** — both are pure pen-*path* models — so it's a new capability, not just a format
+change.
+
+**Recoverable from a static scan:** *width* (per-point stroke thickness via the ink distance
+transform — `vectorize._stroke_width` already computes a global version) and *intensity*
+(per-point ink darkness = faintness). **Not** recoverable: true pen pressure/velocity (needs
+a digitizing tablet); width+darkness are the visual proxies.
+
+**Design (3 layers, increasing cost):**
+1. Format → `[x, y, pen, width, intensity]` (forward-compatible; downstream ignores extra
+   channels until used).
+2. Capture → sample distance-transform width + pixel intensity at each derendered point;
+   natural home is `inksight_vectorize` (it gives the path, we read the crop at each point).
+3. Use → (a) render-time variable line-width/opacity = immediate visual win, no model change;
+   (b) the transformer predicts width/intensity (new tokens/heads) so *generated* handwriting
+   varies thickness — the real architecture lift.
+
+**Sequencing:** capturing width+intensity in the data is cheap + forward-compatible (can do
+alongside the vectorizer); teaching the model to *generate* thickness should wait until a
+plain trajectory is confirmed legible (diarybank-v2) — thickness on garbage trajectories is
+wasted, on good ones it's a clear upgrade.
+
+---
+
 ## 2026-06-28 — Crop tightening (mask-to-box) so derendering sees ONE word
 
 InkSight traces *all* ink in a crop, so our over-capturing crops made it derender neighbours
