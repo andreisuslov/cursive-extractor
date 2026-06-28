@@ -28,8 +28,23 @@ VPAD_DN`), `pdf_utils.box_mask_polygon` + `crop_to_box(mask_to_box=...)` reusing
 Off by default so existing crop/overlay outputs + tests are unchanged. **160 tests pass, ruff
 clean.** Enable with `OCR_CROP_MASK_TO_BOX=1`. Evidence: `ocr/experiments/inksight_masked_clean.png`.
 
-**Next:** connected-component-aware masking (keep only ink connected to in-box ink) to kill
-the vertical sliver; then wire InkSight in as the vectorizer and rebuild `diarybank-v2`.
+**Update — connected-component-aware masking (done).** Replaced the rectangle whiten with
+`mask_crop_to_box`: keep ink that (a) belongs to a component overlapping the detection box
+and (b) sits in a tight x-band / generous y-band, then whiten the rest. This drops *separate*
+neighbour rows that overlap the crop rectangle, and the x-band still hard-cuts ligatured
+horizontal neighbours. Result on the 4 probe words: **Uncle / Aunt / Isabel fully isolated.**
+
+**"John" residual is a detection-box bug, not a masking one.** The "eet-" sliver persisted
+because **John's own detection box dips down into the line below** — masking-to-box faithfully
+keeps whatever the box contains. Tightening the downward band to `vpad_dn=0.15` clips the
+near-miss overhang (the boxes here include descenders, so 0.15 doesn't cut them), but a box
+that *genuinely spans two lines* can't be fixed by box-masking — that's upstream detection
+(tighter/line-aware boxes). Defaults set to `vpad_up=0.30, vpad_dn=0.15`. 14 crop/helper tests
+pass, ruff clean.
+
+**Next:** wire InkSight in as the vectorizer (replace `vectorize.py` output) and rebuild
+`diarybank-v2` from masked crops; separately, tighten detection boxes for the loose two-line
+cases.
 
 ---
 

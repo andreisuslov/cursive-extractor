@@ -53,8 +53,12 @@ CROP_CLEAN = _env_bool("OCR_CROP_CLEAN")
 # existing crop/overlay outputs and tests are unchanged): OCR_CROP_MASK_TO_BOX=1.
 CROP_MASK_TO_BOX = _env_bool("OCR_CROP_MASK_TO_BOX", False)
 CROP_MASK_HPAD = float(os.environ.get("OCR_CROP_MASK_HPAD", "0.15"))  # x slack, frac of box height
-CROP_MASK_VPAD_UP = float(os.environ.get("OCR_CROP_MASK_VPAD_UP", "0.45"))  # ascenders
-CROP_MASK_VPAD_DN = float(os.environ.get("OCR_CROP_MASK_VPAD_DN", "0.40"))  # descenders
+CROP_MASK_VPAD_UP = float(os.environ.get("OCR_CROP_MASK_VPAD_UP", "0.30"))  # ascenders
+# Tight: a loose detection box whose bottom dips into the next line leaves a sliver of
+# that row just below the box; 0.15 clips it while keeping the word's own descenders
+# (the boxes here include descenders). A box that truly spans two lines is an upstream
+# detection problem, not a masking one.
+CROP_MASK_VPAD_DN = float(os.environ.get("OCR_CROP_MASK_VPAD_DN", "0.15"))  # descenders
 
 # The HTML template ships alongside this package.
 HTML_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "handwriting_tool.html")
