@@ -98,15 +98,18 @@ def strokes_to_points_rich(
     """Like ``strokes_to_points`` but adds two channels sampled from the image at each
     point: ``[x, y, pen, width, intensity]``.
 
-    ``width`` = local stroke thickness = ``2 * distanceTransform`` at the point, /``size``
-    (the trajectory rides the stroke centerline, where the distance transform ~= half the
-    stroke width). ``intensity`` = ink darkness = ``(255 - gray) / 255`` in [0,1] (a faint
+    ``width`` = local stroke thickness = ``2 * distanceTransform`` near the point, /``size``
+    (the distance transform ~= half the stroke width at the centerline). The dt is sampled
+    as the MAX over a small window around the point, because the derendered trajectory does
+    not always land exactly on the centerline (an exact-pixel read often hits an edge and
+    reports 0). ``intensity`` = ink darkness = ``(255 - gray) / 255`` in [0,1] (a faint
     "weak" stroke reads low). The pen-up marker carries width=0, intensity=0 (no ink).
     True pen pressure/velocity is NOT recoverable from a static scan; these are its
     visual proxies. ``gray``/``dt`` are the model's 224x224 input in grayscale and its
     distance transform.
     """
     h, w = gray.shape[:2]
+    r = 2  # window radius for the local-max width sample
     out: list[list[float]] = []
     for stroke in strokes:
         if len(stroke) < 2:
@@ -114,7 +117,8 @@ def strokes_to_points_rich(
         for x, y in stroke:
             xi = min(max(round(x), 0), w - 1)
             yi = min(max(round(y), 0), h - 1)
-            width = round(min(2.0 * float(dt[yi, xi]) / size, 1.0), 4)
+            dt_win = dt[max(0, yi - r) : yi + r + 1, max(0, xi - r) : xi + r + 1]
+            width = round(min(2.0 * float(dt_win.max()) / size, 1.0), 4)
             intensity = round((255.0 - float(gray[yi, xi])) / 255.0, 4)
             nx = round(min(max(x / size, 0.0), 1.0), 4)
             ny = round(min(max(y / size, 0.0), 1.0), 4)
