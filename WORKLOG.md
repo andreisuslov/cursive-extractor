@@ -45,8 +45,62 @@ on 2026-06-27 (where bad data looked like a model problem).
 **Recommended sequence.** Step 0 → eyeball + re-run the diarybank validation → only build
 Step 1 if Step 0 isn't enough.
 
-**Status.** A deep-research survey of current SOTA trajectory-recovery methods, datasets,
-and open-source code was launched on 2026-06-28 to ground Step 1 before building it.
+### Survey results (2026-06-28 deep-research, 17 primary sources, 23/25 claims verified 3-0)
+
+**The render-pairs "unlock" is confirmed standard practice** (Bhunia 2018, Nguyen/im2ink
+2020, TRACE 2021, PEN-Net 2022, InkSight 2024): render online trajectories to raster +
+degrade (stroke-width/contrast jitter, grid warp, Gaussian noise, blur) to bridge the
+rendered-vs-real gap. **IAM-OnDB** is the one *substantiated* paired Latin source (221
+writers, 10,426 lines); IBM-UB / Deepwriting / CASIA / RIMES / VNOnDB remain unconfirmed
+for this use (open question).
+
+**Reusable options, ranked for our purpose:**
+
+1. **InkSight** — Google Research, TMLR 2024/25 (arXiv 2402.05804). ViT+mT5 VLM that
+   "derenders" raster handwriting → digital ink. **Apache-2.0, released Small-p weights +
+   Gradio + HF dataset** ([github.com/google-research/inksight](https://github.com/google-research/inksight)).
+   Current generalization SOTA, runnable *today with zero training*. Caveats: TensorFlow;
+   optimizes "valid tracing" not exact temporal order (only ~67% judged human-traced);
+   checkpoint trainability unconfirmed.
+2. **TRACE** — Archibald et al., BYU, ICDAR 2021 (arXiv 2105.11559). CNN→2-layer BiLSTM→
+   1D-conv decoder, per-timestep relative (x,y)+SOS/EOS. **First trained end-to-end on whole
+   lines of arbitrary width** (not isolated chars) → best architectural fit for connected
+   Latin cursive. Trained on IAM-On rendered+degraded. **Adaptive-GT DTW loss directly
+   resolves junction/loop pen-order ambiguity** (per step, at most one edit: swap adjacent
+   strokes or invert a stroke's direction). Our render-pairs plan = literally TRACE's recipe.
+3. **PEN-Net** — Chen et al., ACCV 2022 ([github.com/ChenZhounan/PEN-Net](https://github.com/ChenZhounan/PEN-Net)).
+   Official code; introduces **AIoU** (glyph-fidelity metric computable from the binarized
+   image mask with **no GT trajectory** — ideal for our unlabeled diary crops) and **LDTW**
+   (length-normalized DTW, fixes DTW's bias toward fewer points). CJK/Indic focus.
+4. **Bhunia 2018** — ConvLSTM-enc→LSTM-dec seq2seq, official code ([repo](https://github.com/AyanKumarBhunia/Handwriting-Trajectory-Recovery)). Isolated chars; simplest baseline.
+5. **wor** — Diaz/Crispo et al., IJIMAI 2024 (arXiv 2406.03194; [github.com/gioelecrispo/wor](https://github.com/gioelecrispo/wor), MATLAB/MIT).
+   Classical skeleton → good-continuity junction pairing → **Dijkstra** path tracing. This is
+   the modern reference for **Step 0** — exactly the smoothness-traversal we planned.
+   (`im2ink` is a demo-only repo with no source code — do NOT plan to fine-tune it.)
+
+**Metrics:** evaluate the recoverer *directly* with **LDTW** + **AIoU** (AIoU needs no GT, so
+it works on diary crops); DTW / nearest-neighbor distance / LPIPS as supporting. Plain RMSE
+(needs exact point-count match) and raw DTW (prefers fewer points) are inadequate.
+
+**Central risk (survey's top caveat):** only TRACE and InkSight were validated on connected
+Latin at all, and **none** on faded, ruled, 19th-20th-century diary ink. Domain transfer to
+our crops is the unverified make-or-break. Mitigate with heavy degradation augmentation and
+possibly self-training on unlabeled diary crops.
+
+### Revised, grounded plan
+
+1. **Step 0 — smoothness graph traversal** to replace nearest-neighbor `order_points`,
+   porting the good-continuity + Dijkstra logic from `wor`. ~A day; might suffice.
+2. **Zero-training probe — run InkSight Small-p on ~10 diary crops** before building anything.
+   It's free, SOTA, and released; if it derenders our ink sanely we may just fine-tune/use it
+   and skip a from-scratch model. (Highest-ROI new finding.)
+3. **Step 1 (only if 0+2 fall short) — fork a TRACE-style CNN+BiLSTM** word/line recoverer
+   with the adaptive-GT DTW loss, trained on IAM-On rendered+degraded pairs, validated by
+   LDTW+AIoU **before** feeding the generator.
+
+Open questions to resolve while building: is metric-faithful pen-order even required for our
+generator, or is InkSight "valid tracing" enough? Best degradation recipe for historical
+scans? Are IBM-UB/Deepwriting usable to add connected-cursive variety beyond IAM-On?
 
 ---
 
