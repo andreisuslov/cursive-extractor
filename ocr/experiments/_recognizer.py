@@ -70,6 +70,7 @@ FONT_PATHS = [
     "/System/Library/Fonts/ChalkboardSE.ttc",
 ]
 
+
 def font_bank(paths: list[str] = FONT_PATHS) -> list[str]:
     """The usable fonts from ``paths`` (those that exist), falling back to matplotlib's
     bundled DejaVuSans when none are present -- so the recognizer still renders on Linux/CI
