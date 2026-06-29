@@ -20,7 +20,10 @@ import argparse
 import json
 import re
 
+import cv2
 import numpy as np
+
+from . import _recognizer
 
 
 def _down_points(points: list[list[float]]) -> list[list[float]]:
@@ -44,6 +47,65 @@ def segment_word_strokes(points: list[list[float]], n_letters: int) -> list[list
     letters: list[list[list[float]]] = [[] for _ in range(n_letters)]
     for p in pts:
         k = min(n_letters - 1, int((p[0] - x0) / span * n_letters))
+        letters[k].append(p)
+    return letters
+
+
+def _rasterize(points: list[list[float]], height: int = 48):
+    """Draw a word's pen-down trajectory to a binary image for the recognizer.
+
+    Returns ``(binary HxW uint8, x0, x1, W)`` where x0/x1 are the normalized-x bounds
+    (to map column cuts back to trajectory x), or ``None`` if too few points.
+    """
+    pts = _down_points(points)
+    if len(pts) < 2:
+        return None
+    arr = np.array([[p[0], p[1]] for p in pts], float)
+    x0, y0 = arr.min(0)
+    x1, y1 = arr.max(0)
+    sx, sy = max(x1 - x0, 1e-9), max(y1 - y0, 1e-9)
+    w = max(height, min(round(height * sx / sy), 8 * height))
+    img = np.zeros((height, w), np.uint8)
+    prev = None
+    for p in points:  # walk in order; break the line at pen-up markers
+        if len(p) >= 3 and p[2] == 1:
+            px = int((p[0] - x0) / sx * (w - 1))
+            py = int((p[1] - y0) / sy * (height - 1))
+            if prev is not None:
+                cv2.line(img, prev, (px, py), 255, 2)
+            prev = (px, py)
+        else:
+            prev = None
+    return img, float(x0), float(x1), w
+
+
+def forced_align_word_strokes(
+    points: list[list[float]], text: str, recognizer=None
+) -> list[list[list[float]]]:
+    """Cut a word's trajectory into ``len(text)`` letters by recognizer forced alignment.
+
+    Rasterizes the path, runs ``_recognizer.align_boundaries`` (recognizer score for the
+    KNOWN letter sequence + per-letter width prior; geometry term off, ``beta=0``), then
+    maps the chosen column cuts back to split the trajectory points. Falls back to the
+    equal-x baseline when there's nothing to align.
+    """
+    pts = _down_points(points)
+    L = len(text)
+    r = _rasterize(points)
+    if r is None or L <= 1:
+        return segment_word_strokes(points, max(1, L))
+    img, x0, x1, w = r
+    rec = recognizer or _recognizer.get_recognizer()
+    cand = np.arange(w, dtype=float)
+    geom = np.zeros(w, dtype=float)
+    bpx = _recognizer.align_boundaries(
+        img, text, 0.0, float(w - 1), cand, geom, recognizer=rec, beta=0.0
+    )
+    sx = max(x1 - x0, 1e-9)
+    xb = sorted(x0 + (b / max(1, w - 1)) * sx for b in bpx)
+    letters: list[list[list[float]]] = [[] for _ in range(L)]
+    for p in pts:
+        k = min(sum(1 for b in xb if p[0] >= b), L - 1)
         letters[k].append(p)
     return letters
 
@@ -83,25 +145,29 @@ def main(argv: list[str] | None = None) -> None:
 
     words = _load_words(args.strokes)[: args.n]
     rows = len(words)
-    _fig, axes = plt.subplots(rows, 1, figsize=(7, 1.8 * rows))
+    rec = _recognizer.get_recognizer()
+    _fig, axes = plt.subplots(rows, 2, figsize=(12, 1.8 * rows))
     if rows == 1:
-        axes = [axes]
+        axes = axes.reshape(1, 2)
     cmap = plt.colormaps["tab10"]
-    qsum = 0.0
-    for ax, b in zip(axes, words, strict=False):
-        text = b["metadata"]["asciiSequence"]
-        letters = segment_word_strokes(b["points"], len(text))
-        qsum += cut_quality(letters)
+
+    def draw(ax, letters, title):
         for k, seg in enumerate(letters):
             if seg:
                 a = np.array(seg, float)
                 ax.scatter(a[:, 0], -a[:, 1], s=4, color=cmap(k % 10))
-        ax.set_title(f'"{text}"  ({len(text)} letters)', fontsize=9)
+        ax.set_title(title, fontsize=9)
         ax.set_aspect("equal")
         ax.axis("off")
+
+    for i, b in enumerate(words):
+        text = b["metadata"]["asciiSequence"]
+        draw(axes[i, 0], segment_word_strokes(b["points"], len(text)), f'baseline "{text}"')
+        draw(
+            axes[i, 1], forced_align_word_strokes(b["points"], text, rec), f'forced-align "{text}"'
+        )
     plt.tight_layout()
     plt.savefig(args.out, dpi=110, facecolor="white")
-    print(f"mean cut_quality (non-empty bins): {qsum / max(1, rows):.2f}")
     print(f"wrote {args.out}")
 
 

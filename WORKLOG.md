@@ -9,6 +9,26 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 — #2 progress: forced-alignment letter cutter on trajectories (marginal)
+
+Built the real cutter for #2: `forced_align_word_strokes` in `_letter_segment_strokes.py`
+rasterizes a clean InkSight word path and reuses `_recognizer.align_boundaries` (recognizer
+score for the KNOWN letter sequence + per-letter width prior; geometry term off), then maps
+the chosen column cuts back to split the trajectory points. Tests + baseline-vs-aligned render
+added.
+
+**Self-checked (honest): marginal over the equal-x baseline.** Forced alignment runs and moves
+the boundaries to uneven, recognizer-driven positions, but the cuts still don't clearly land on
+true letter boundaries — because the **font-template recognizer is weak** (the M11 finding,
+reconfirmed on clean trajectories: a weak recognizer can't guide cuts well). So #2's cutter
+exists and is correct, but the recognizer is the bottleneck, not the alignment.
+
+**Next levers for #2:** (a) a stronger recognizer — the bootstrap CNN trained on real diary
+letters (M11) roughly doubled font accuracy; plug it into `align_boundaries` (it already accepts
+any object with `scores()`). (b) **trajectory-native cues** the image didn't have: cut at
+pen-lifts and at the baseline-crossing minima between cursive letters (a strong handwriting
+signal). Likely (a)+(b) combined.
+
 ## 2026-06-28 — First GPU run (InkSight at scale): pipeline works, data mostly noisy
 
 Ran `inksight_vectorize --rich` on a full diary page (0-02 p1, 314 boxes) on a RunPod **L40S**.
