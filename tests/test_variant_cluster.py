@@ -5,6 +5,13 @@ import numpy as np
 from ocr.experiments import _variant_cluster as vc
 
 
+def test_merge_libraries_pools_glyphs_across_sources():
+    g1, g2, g3 = [[0.0, 0.0]], [[1.0, 1.0]], [[2.0, 2.0]]
+    merged = vc.merge_libraries([{"a": [g1]}, {"a": [g2], "b": [g3]}])
+    assert merged["a"] == [g1, g2]  # 'a' pooled across both libraries
+    assert merged["b"] == [g3]
+
+
 def test_kmeans_separates_two_clusters():
     x = np.array([[0.0, 0.0], [0.1, 0.0], [5.0, 5.0], [5.1, 5.0]])
     labels = vc.kmeans(x, 2)

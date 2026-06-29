@@ -9,6 +9,15 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 (autonomous) — #3 multi-source aggregation (N6)
+
+`_variant_cluster.merge_libraries` pools several per-letter libraries (one per page/diary) into
+one before clustering, and `--library` now takes multiple files. Lets a single writer's coverage
+accumulate across pages (one page only reliably yields common letters). Trivial dict-merge,
+unit-tested; the real lever is still getting clean letters per page (HITL), this just stacks them.
+
+---
+
 ## 2026-06-28 (autonomous) — #2 render fidelity (baseline + ascenders/descenders)
 
 `_font_render.glyph_box`: a dep-free, label-based typography heuristic — ascenders (bdfhklt) +

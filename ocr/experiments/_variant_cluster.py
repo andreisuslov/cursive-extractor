@@ -72,6 +72,16 @@ def cluster_letter(glyphs: list[list[list[float]]], k: int = 3) -> list[int]:
     return medoids
 
 
+def merge_libraries(libs: list[dict[str, list]]) -> dict[str, list]:
+    """Pool several per-letter libraries (e.g. one per page/diary) into one -- the N6 step that
+    lets a writer's coverage accumulate across pages before clustering."""
+    merged: dict[str, list] = {}
+    for lib in libs:
+        for ch, glyphs in lib.items():
+            merged.setdefault(ch, []).extend(glyphs)
+    return merged
+
+
 def build_variants(
     library: dict[str, list], k: int = 3, min_samples: int = 1
 ) -> dict[str, list[list[list[float]]]]:
@@ -86,14 +96,24 @@ def build_variants(
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Cluster harvested letters into <=K variants (N3)")
-    p.add_argument("--library", required=True, help="harvested library JSON (char -> [glyphs])")
+    p.add_argument(
+        "--library",
+        required=True,
+        nargs="+",
+        help="one or more library JSONs (char -> [glyphs]); multiple are merged (N6)",
+    )
     p.add_argument("--k", type=int, default=3, help="max variants per letter")
     p.add_argument("--out", default=None, help="Save the variant library JSON here")
     p.add_argument("--render", default=None, help="Render each letter's variants here")
     args = p.parse_args(argv)
 
-    with open(args.library) as f:
-        library = json.load(f)
+    libs = []
+    for path in args.library:
+        with open(path) as f:
+            libs.append(json.load(f))
+    library = merge_libraries(libs)
+    if len(libs) > 1:
+        print(f"merged {len(libs)} libraries -> {len(library)} letters")
     variants = build_variants(library, args.k)
     covered = sum(1 for v in variants.values() if len(v) >= args.k)
     print(f"letters: {len(variants)} | with full {args.k} variants: {covered}")

@@ -52,8 +52,8 @@ python -m ocr.experiments._letter_harvest --strokes <strokes.json> --recognize -
 python -m ocr.experiments._letter_review export --strokes <strokes.json> --out review.json
 #    open ocr/experiments/letter_review.html, load review.json, fix cuts, save corrected.json
 python -m ocr.experiments._letter_review ingest --review corrected.json --out lib.json
-# 3. cluster into <=3 variants
-python -m ocr.experiments._variant_cluster --library lib.json --k 3 --out variants.json
+# 3. cluster into <=3 variants (pass several libs to pool a writer's pages -- N6)
+python -m ocr.experiments._variant_cluster --library lib1.json lib2.json --k 3 --out variants.json
 # 4. render text in the harvested hand
 python -m ocr.experiments._font_render --variants variants.json --text "hello" --out hello.png
 # 5. export reusable SVG glyph assets (paths.json + specimen.svg)
