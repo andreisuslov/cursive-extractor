@@ -74,17 +74,19 @@ as items land (the matching detail lives in `WORKLOG.md`).
   (`ocr/experiments/_recognizer.py`), judged per-letter against the known transcription.
 - [x] **N3 — Stage 5: variant clustering.** Built: `ocr/experiments/_variant_cluster.py`
   (k-means → ≤3 medoid variants/letter). Works on whatever glyphs it's given.
-- [x] **N4/N5 — Stages 6-7: font render (prototype).** Built: `ocr/experiments/_font_render.py`
-  — `render_text` lays variant glyphs on a baseline, cycles variants per repeat (dynamic), draws
-  joins. **Full pipeline harvest→cluster→render runs end-to-end.** Prototype is a stroke renderer,
-  not yet OTF/`fontTools`; glyphs are bbox-normalized (even cells). Output quality gated by the
-  clean-letter blocker below, NOT by this code.
+- [x] **N4/N5 — Stages 6-7: font render.** `_font_render.py` — variant glyphs on a real baseline
+  (ascender/descender/x-height via `glyph_box`), variants cycled per repeat (dynamic), nearby
+  joins; aspect-preserving glyphs. **Full pipeline harvest→cluster→render runs end-to-end.**
+- [x] **N4 export — SVG glyph assets.** `_font_export.py` → `paths.json` + `specimen.svg` (drops
+  into a font editor / opentype.js). OTF/`fontTools` deferred (needs stroke→outline; premature
+  until a clean diary alphabet exists — see D1).
+- [x] **N6 (mechanism) — multi-source aggregation.** `_variant_cluster.merge_libraries` +
+  multi-`--library` clustering pools a writer's pages. The *supply* per page is still the blocker.
 - [ ] **BLOCKER — clean per-letter glyph supply.** Everything end-to-end works EXCEPT producing
   clean labelled letters (N2). Automatic cutting of connected cursive is unsolved here (3 cutters
-  + geometric + recognition gates all fail). Paths: high-precision harvest (single-letter words +
-  pen-lift-isolated) for a partial clean alphabet; human-in-the-loop cut review for a full one.
-- [ ] **N6 — Per-writer coverage.** A font needs ≥3 of *every* glyph; one page rarely has
-  that. Decide gap-fill: more pages per writer, or neural synthesis (track A) for rare letters.
+  + geometric + recognition gates all fail). **Built path: human-in-the-loop** (`_letter_review.py`
+  + `letter_review.html`) — fastest route to a clean alphabet for one writer. Backend proven on
+  clean letters (`font_backend_demo.png`); needs the user to run pages through the review tool.
 
 **Decisions to make**
 - [ ] **D1 — Font tech:** real OpenType randomized alternates vs a custom SVG/stroke renderer
