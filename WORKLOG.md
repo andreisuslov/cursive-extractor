@@ -9,6 +9,28 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 (autonomous) — N3 + N4 built: the whole font back-half now runs end-to-end
+
+Built the unbuilt back half of the roadmap:
+- **N3** `_variant_cluster.py` — k-means (deterministic) over glyph shape-descriptors → ≤3
+  medoid variants per letter. On the page library: 44 letters, 36 with a full 3 variants.
+- **N4/N5** `_font_render.py` — `render_text(variants, text)`: lay glyphs along a baseline,
+  **cycle each letter's variants on repeats** (the "dynamic" font), draw cursive joins. CLI +
+  tests.
+
+**End-to-end demo runs** (harvest → cluster → render): typed "the little baby" produces three
+joined word-groups with variant rotation — i.e. the full pipeline works. **Output is scribble**
+because the harvested glyphs are rough (the cut problem), but the machinery is proven and tested
+(188 tests green). **The entire project is now wired end-to-end; the one remaining blocker is
+clean per-letter glyph SUPPLY.**
+
+Prototype limits (honest): glyphs are bbox-normalized so per-letter width + ascender/descender
+height are lost (even cells, even height) — fixable by preserving aspect upstream.
+
+**Next (autonomous):** get *some* genuinely clean letters — high-precision harvest from
+single-letter words + pen-lift-isolated letters — to re-demo on real glyphs; then build a
+human-in-the-loop cut-review tool (the realistic path to a full clean alphabet for one writer).
+
 ## 2026-06-28 (autonomous) — recognition gate insufficient → pivot to building N3/N4
 
 Added a per-letter recognition gate to the harvester (`harvest(..., recognizer, rec_threshold)`):

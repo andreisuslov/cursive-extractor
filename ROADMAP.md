@@ -72,13 +72,17 @@ as items land (the matching detail lives in `WORKLOG.md`).
   harness + tests. Baseline is deliberately crude (equal-width bands, not real letter
   boundaries). **Next:** forced-alignment cuts using letter-width priors / the recognizer
   (`ocr/experiments/_recognizer.py`), judged per-letter against the known transcription.
-- [ ] **N3 — Stage 5: variant clustering.** Cluster labelled letters into ≥3 variants per
-  letter; extend the allograph library (M12) to the clean strokes.
-- [ ] **N4 — Stage 6: font backend (new).** Variant glyphs → a real dynamic font
-  (`fontTools`: outlines → OTF with `calt`/randomized alternates + cursive joins). Prototype
-  on one well-covered writer.
-- [ ] **N5 — Stage 7: render text** in the person's hand (type → font with variant rotation
-  + joins). End-to-end demo.
+- [x] **N3 — Stage 5: variant clustering.** Built: `ocr/experiments/_variant_cluster.py`
+  (k-means → ≤3 medoid variants/letter). Works on whatever glyphs it's given.
+- [x] **N4/N5 — Stages 6-7: font render (prototype).** Built: `ocr/experiments/_font_render.py`
+  — `render_text` lays variant glyphs on a baseline, cycles variants per repeat (dynamic), draws
+  joins. **Full pipeline harvest→cluster→render runs end-to-end.** Prototype is a stroke renderer,
+  not yet OTF/`fontTools`; glyphs are bbox-normalized (even cells). Output quality gated by the
+  clean-letter blocker below, NOT by this code.
+- [ ] **BLOCKER — clean per-letter glyph supply.** Everything end-to-end works EXCEPT producing
+  clean labelled letters (N2). Automatic cutting of connected cursive is unsolved here (3 cutters
+  + geometric + recognition gates all fail). Paths: high-precision harvest (single-letter words +
+  pen-lift-isolated) for a partial clean alphabet; human-in-the-loop cut review for a full one.
 - [ ] **N6 — Per-writer coverage.** A font needs ≥3 of *every* glyph; one page rarely has
   that. Decide gap-fill: more pages per writer, or neural synthesis (track A) for rare letters.
 
