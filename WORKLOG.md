@@ -9,6 +9,32 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 — #2: confidence-gated harvester built; output still garbage (the judge is missing)
+
+Built `_letter_harvest.py`: cut each word, score the cut's confidence (snapped-fraction +
+width-balance), keep confident words, accumulate normalized per-letter glyphs, report coverage.
+Tests + a render of the harvested samples.
+
+**Self-checked, honest: it does NOT yet yield clean letters.** On the page's strokes it kept
+**242/247 words at threshold 0.6 (98%)** — the geometric confidence proxy barely filters — and
+the rendered harvested glyphs ('e','a','n','i','o','l') are mostly fragments / ruled-line bits,
+not recognizable letters. Coverage looked great on paper (36/45 letters ≥3: e=112, a=85, …, but
+rare letters/capitals sparse: Q=1, x=1, z=2) — **but those counts are meaningless because the
+samples aren't clean letters.**
+
+**Root cause:** a *geometric* confidence (snap + width) can't tell a good cut from a bad one;
+distinguishing "this slice is really an 'e'" needs **recognition**. So #2's wall is unchanged
+after 3 cutters + a harvester: cut quality + the lack of a reliable per-letter *judge*. Same
+wall as M10-M13, now confirmed even with clean InkSight strokes + known L + confidence gating.
+
+**Strategic fork (needs a decision, not more cutters):**
+- (a) **Recognition-gated harvest** — keep a letter only if a recognizer agrees it's that
+  letter. Needs a *strong* recognizer (the bootstrap CNN, M11) — the recurring lever.
+- (b) **Pen-lift-only harvest** — keep only letters the writer truly lifted between (unambiguous,
+  but few in connected cursive; viable for semi-cursive/print hands).
+- (c) **Human-in-the-loop** correction tool — realistic for building ONE writer's font.
+- (d) **Reconsider the neural-generator path**, which needs no letter cutting at all.
+
 ## 2026-06-28 — #2: trajectory-cue cutter + the reframe (cut quality is the hard problem)
 
 Added a third, recognizer-free cutter: `trajectory_cut_word` proposes cuts from **pen-lifts +

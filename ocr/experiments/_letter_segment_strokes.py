@@ -148,18 +148,16 @@ def _pen_lift_x(points: list[list[float]]) -> list[float]:
     return out
 
 
-def trajectory_cut_word(points: list[list[float]], text: str) -> list[list[list[float]]]:
-    """Cut a word's trajectory into ``len(text)`` letters using TRAJECTORY cues, no recognizer.
-
-    Candidate cuts = pen-lifts + baseline-valley minima (the ligature dips between cursive
-    letters). We know L, so each of the L-1 width-prior expected boundaries snaps to the
-    nearest candidate within ~0.6 letter-widths (else falls back to the expected position).
-    This exploits the ordered pen path the raster recognizer can't see.
+def trajectory_cuts(points: list[list[float]], text: str) -> tuple[list[float], list[bool]]:
+    """The L-1 cut x-positions + a bool per cut: did it SNAP to a real candidate
+    (pen-lift / baseline valley, ``True``) or fall back to the width-prior expected
+    position (``False``)? The snapped fraction is the core confidence signal — a cut
+    grounded in real pen structure is trustworthy; a fallback is a guess.
     """
     pts = _down_points(points)
     L = len(text)
     if L <= 1 or len(pts) < L:
-        return segment_word_strokes(points, max(1, L))
+        return [], []
     xs = [p[0] for p in pts]
     xmin, xmax = min(xs), max(xs)
     span = max(xmax - xmin, 1e-9)
@@ -168,15 +166,43 @@ def trajectory_cut_word(points: list[list[float]], text: str) -> list[list[list[
     snap = 0.6 * span / L
     min_gap = 0.2 * span / L
     cuts: list[float] = []
+    snapped: list[bool] = []
     for e in expected:
         near = [c for c in cands if abs(c - e) <= snap and (not cuts or c > cuts[-1] + min_gap)]
-        cuts.append(min(near, key=lambda c: abs(c - e)) if near else e)
-    cuts = sorted(cuts)
-    letters: list[list[list[float]]] = [[] for _ in range(L)]
+        if near:
+            cuts.append(min(near, key=lambda c: abs(c - e)))
+            snapped.append(True)
+        else:
+            cuts.append(float(e))
+            snapped.append(False)
+    order = sorted(range(len(cuts)), key=lambda i: cuts[i])
+    return [cuts[i] for i in order], [snapped[i] for i in order]
+
+
+def split_by_cuts(
+    pts: list[list[float]], cuts: list[float], n_letters: int
+) -> list[list[list[float]]]:
+    """Assign each point to a letter by how many cut x-positions it has passed."""
+    letters: list[list[list[float]]] = [[] for _ in range(n_letters)]
     for p in pts:
-        k = min(sum(1 for c in cuts if p[0] >= c), L - 1)
+        k = min(sum(1 for c in cuts if p[0] >= c), n_letters - 1)
         letters[k].append(p)
     return letters
+
+
+def trajectory_cut_word(points: list[list[float]], text: str) -> list[list[list[float]]]:
+    """Cut a word's trajectory into ``len(text)`` letters using TRAJECTORY cues, no recognizer.
+
+    Candidate cuts = pen-lifts + baseline-valley minima (the ligature dips between cursive
+    letters), each snapped to the nearest width-prior boundary (see ``trajectory_cuts``).
+    Exploits the ordered pen path the raster recognizer can't see.
+    """
+    pts = _down_points(points)
+    L = len(text)
+    if L <= 1 or len(pts) < L:
+        return segment_word_strokes(points, max(1, L))
+    cuts, _snapped = trajectory_cuts(points, text)
+    return split_by_cuts(pts, cuts, L)
 
 
 def cut_quality(letters: list[list[list[float]]]) -> float:
