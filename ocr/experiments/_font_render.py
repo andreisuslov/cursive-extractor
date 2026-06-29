@@ -44,14 +44,14 @@ def render_text(variants: dict[str, list], text: str, out_path: str, join: bool 
     import numpy as np
 
     seq = variant_sequence(variants, text)
-    advance, gap = 1.15, 0.7  # per-glyph x advance; blank-space width
-    fig_w = max(4.0, 0.5 * advance * max(1, len(text)))
+    intra_gap, space = 0.08, 0.6  # gap between joined letters; blank-space width
+    fig_w = max(4.0, 0.45 * max(1, len(text)))
     fig, ax = plt.subplots(figsize=(fig_w, 1.8))
     x_off = 0.0
     prev_end = None
     for key, idx in seq:
         if idx is None:  # space / unavailable -> gap, break the join
-            x_off += gap
+            x_off += space
             prev_end = None
             continue
         a = np.array(variants[key][idx], float)
@@ -63,7 +63,7 @@ def render_text(variants: dict[str, list], text: str, out_path: str, join: bool 
             )
         ax.plot(gx, gy, "-", color="black", lw=1.3, solid_capstyle="round")
         prev_end = (gx[-1], gy[-1])
-        x_off += advance
+        x_off += float(a[:, 0].max()) + intra_gap  # advance by this glyph's actual width
     ax.set_aspect("equal")
     ax.axis("off")
     ax.set_xlim(-0.3, x_off + 0.3)

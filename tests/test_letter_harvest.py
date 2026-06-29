@@ -5,11 +5,12 @@ import json
 from ocr.experiments import _letter_harvest as h
 
 
-def test_normalize_letter_to_unit_bbox():
-    n = h.normalize_letter([[2.0, 4.0], [4.0, 4.0], [4.0, 8.0]])  # x 2..4, y 4..8
+def test_normalize_letter_aspect_preserved():
+    # x 2..4 (w=2), y 4..8 (h=4): divide both by height -> y in [0,1], x in [0, 0.5]
+    n = h.normalize_letter([[2.0, 4.0], [4.0, 4.0], [4.0, 8.0]])
     assert n[0] == [0.0, 0.0]
-    assert n[1] == [1.0, 0.0]
-    assert n[2] == [1.0, 1.0]
+    assert n[1] == [0.5, 0.0]  # width/height = 0.5 preserved
+    assert n[2] == [0.5, 1.0]
 
 
 def test_confidence_zero_when_a_letter_is_empty():

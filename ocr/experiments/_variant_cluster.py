@@ -23,7 +23,10 @@ def glyph_descriptor(glyph: list[list[float]], size: int = 24, blur: float = 1.2
     """Rasterize a normalized [0,1] glyph (connected polyline) to a size*size blurred,
     L2-normalised vector -- a shape descriptor robust to small variation."""
     img = np.zeros((size, size), np.uint8)
-    pts = np.clip(np.array(glyph, float), 0.0, 1.0)
+    a = np.array(glyph, float)
+    mn, mx = a.min(0), a.max(0)
+    span = np.maximum(mx - mn, 1e-9)
+    pts = (a - mn) / span  # map this glyph's own bbox to the unit square (aspect-agnostic)
     prev = None
     for x, y in pts:
         cur = (int(x * (size - 1)), int(y * (size - 1)))

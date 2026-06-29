@@ -24,13 +24,14 @@ from . import _letter_segment_strokes as ls
 
 
 def normalize_letter(seg_pts: list[list[float]]) -> list[list[float]]:
-    """A letter's points normalized to its own [0,1] bounding box (x, y only)."""
+    """A letter's points scaled ASPECT-PRESERVED: y -> [0,1] (divide by height), x by the same
+    factor (so x ends at width/height) and shifted to start at 0. Keeps relative letter width so
+    the renderer can kern properly (a narrow 'l' vs a wide 'm')."""
     a = np.array([[p[0], p[1]] for p in seg_pts], float)
-    mn, mx = a.min(0), a.max(0)
-    span = np.maximum(mx - mn, 1e-9)
+    mn = a.min(0)
+    h = max(float(a[:, 1].max() - mn[1]), 1e-9)
     return [
-        [round(float((p[0] - mn[0]) / span[0]), 4), round(float((p[1] - mn[1]) / span[1]), 4)]
-        for p in seg_pts
+        [round(float((p[0] - mn[0]) / h), 4), round(float((p[1] - mn[1]) / h), 4)] for p in seg_pts
     ]
 
 
