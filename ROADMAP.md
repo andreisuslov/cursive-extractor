@@ -61,11 +61,17 @@ The project backlog. Checked = done; ordered roughly by dependency. Keep this li
 as items land (the matching detail lives in `WORKLOG.md`).
 
 **Critical path to the goal**
-- [ ] **N1 — Validate stage 3 at scale.** Build `diarybank-v2` with the InkSight vectorizer
-  on a GPU; confirm clean strokes for whole pages (not just probe crops).
-- [ ] **N2 — Re-attack stage 4 on clean strokes (make-or-break).** Segment the *InkSight
-  trajectory* into letters — cutting a clean pen path should beat cutting messy ink — and
-  label each cut from the known transcription. The whole middle hinges on this.
+- [x] **N1 — Validate stage 3 at scale.** Done on a RunPod L40S (~5 s/word, ~58× the Mac CPU,
+  full 314-box page). Mechanics ✓ — but the page came out **mostly noisy** (loose boxes +
+  ruled lines + neighbour bleed), so the data isn't usable as-is. Don't scale to the full
+  corpus until a single page comes out mostly clean. (WORKLOG 2026-06-28.)
+- [x] **#1 — Ruled-line removal in `inksight_vectorize`** (`clean_word` before derender).
+  Modest gain (trims some bleed); confirms crop-level cleaning is near its ceiling.
+- [ ] **N2 — Re-attack stage 4 on clean strokes (make-or-break). IN PROGRESS.** Started:
+  `ocr/experiments/_letter_segment_strokes.py` — a baseline equal-x trajectory cutter + eval
+  harness + tests. Baseline is deliberately crude (equal-width bands, not real letter
+  boundaries). **Next:** forced-alignment cuts using letter-width priors / the recognizer
+  (`ocr/experiments/_recognizer.py`), judged per-letter against the known transcription.
 - [ ] **N3 — Stage 5: variant clustering.** Cluster labelled letters into ≥3 variants per
   letter; extend the allograph library (M12) to the clean strokes.
 - [ ] **N4 — Stage 6: font backend (new).** Variant glyphs → a real dynamic font
