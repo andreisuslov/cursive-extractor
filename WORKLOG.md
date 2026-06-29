@@ -9,6 +9,32 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-29 — word borders: global layout partition + cell-clamped tightening (`ocr/refine_boxes.py`)
+
+The upstream word-border bottleneck (loose Gemini boxes contaminating crops → bad strokes →
+bad letters). Diagnosed on page 1 (314 words): Gemini gives one box per word in reading order,
+but the boxes are **loose and overlap into neighbours and the line above/below** — the P1
+vertical bleed. Per-box `fit_crop_to_ink` can't fix it (only looks inside one box), and — key
+finding — **`fit_crop_to_ink` actually OVER-expands on dense connected cursive**: feeding it any
+box grabs a 2-line connected blob (verified by crop comparison). So "refine then existing fit"
+fails.
+
+Fix (new `ocr/refine_boxes.py`, image-free core + tests):
+- `refine_boxes(boxes)` — global layout partition: cluster boxes into columns (two-up gutter) +
+  rows, then give each word a cell bounded by its **row band** (vertically) and **neighbour
+  midpoints** (horizontally). Non-overlapping by construction → a crop physically can't reach the
+  next line. Validated: the chaotic overlapping boxes become a clean brick layout.
+- `tighten_to_ink(page, cell)` — clamp each cell to the ink bbox **inside** it, never expanding
+  (unlike `fit_crop_to_ink`). Result: tight, single-line, bleed-free word crops ("Uncle", "John",
+  "Aunt", "Isabel", "had" all clean) — beats both the raw Gemini boxes and the existing fit.
+
+Use (after detection, before vectorize; do NOT also run `fit_crop_to_ink`, it re-expands):
+`python -m ocr.refine_boxes --boxes boxes.json --out refined.json --page page.png --tighten`
+
+Remaining (separate problem): some Gemini boxes are offset from their *label* (a grounding-
+precision issue), so a clean crop occasionally shows the neighbour word. That's detection, not
+border-finding — next lever if needed.
+
 ## 2026-06-28 (autonomous) — #3 multi-source aggregation (N6)
 
 `_variant_cluster.merge_libraries` pools several per-letter libraries (one per page/diary) into
