@@ -31,7 +31,9 @@ can't tell a good cut from a bad one). Even single-letter words don't yield text
 ## Realistic paths to clean supply (pick one)
 
 1. **Human-in-the-loop** cut review (prebuild auto-cuts, human confirms/nudges) — how
-   Calligraphr-style tools ship a font; realistic for one writer.
+   Calligraphr-style tools ship a font; realistic for one writer. **Built:**
+   `_letter_review.py` (export auto-cuts → `review.json`; ingest corrected → clean library) +
+   `letter_review.html` (drag/add/delete cut lines per word, export). See "Run it" below.
 2. **Letter template** collection (`ocr/handwriting_tool.html` / `datasets/collect.html`) — have
    the writer write each letter a few times → clean isolated glyphs straight into N3/N4. Sidesteps
    cutting entirely; changes the input from "arbitrary document" to "fill a template".
@@ -43,8 +45,12 @@ can't tell a good cut from a bad one). Even single-letter words don't yield text
 ```bash
 # 1. strokes (GPU; needs InkSight model + a page's boxes.json) — see _inksight_probe.py for setup
 OCR_INKSIGHT_MODEL=/path/to/small-p-cpu python -m ocr.inksight_vectorize --pdf <pdf> --page N --rich
-# 2. harvest letters (recognition-gated)
+# 2a. AUTOMATIC: harvest letters (recognition-gated) -- rough, see blocker above
 python -m ocr.experiments._letter_harvest --strokes <strokes.json> --recognize --out lib.json
+# 2b. HUMAN-IN-THE-LOOP (clean): export auto-cuts, fix them in the browser tool, ingest
+python -m ocr.experiments._letter_review export --strokes <strokes.json> --out review.json
+#    open ocr/experiments/letter_review.html, load review.json, fix cuts, save corrected.json
+python -m ocr.experiments._letter_review ingest --review corrected.json --out lib.json
 # 3. cluster into <=3 variants
 python -m ocr.experiments._variant_cluster --library lib.json --k 3 --out variants.json
 # 4. render text in the harvested hand

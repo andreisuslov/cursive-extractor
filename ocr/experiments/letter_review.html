@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Letter-cut review</title>
+<style>
+  body { font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; color: #1a1a1a; }
+  #wrap { max-width: 900px; }
+  canvas { border: 1px solid #ccc; border-radius: 6px; width: 100%; height: 240px; touch-action: none; }
+  .row { display: flex; gap: 10px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+  button { padding: 6px 12px; border: 1px solid #bbb; border-radius: 6px; background: #f6f6f6; cursor: pointer; }
+  #word { font-size: 20px; font-weight: 600; }
+  .muted { color: #666; }
+  .ok { color: #2e7d32; } .bad { color: #b03030; }
+  kbd { background: #eee; border: 1px solid #ccc; border-radius: 3px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h2>Letter-cut review</h2>
+  <p class="muted">Load the <code>review.json</code> from
+    <code>python -m ocr.experiments._letter_review export</code>. For each word, drag the red cut
+    lines so each <b>segment is one letter</b> (left→right). Double-click to add a cut,
+    <kbd>shift</kbd>+click a cut to delete it. You need <b>(letters − 1)</b> cuts per word.
+    Then <b>Export</b> and run <code>ingest</code>.</p>
+
+  <div class="row">
+    <input type="file" id="file" accept="application/json" />
+    <button id="prev">◀ Prev</button>
+    <button id="next">Next ▶</button>
+    <button id="auto">Reset to auto-cuts</button>
+    <button id="skip">Skip word</button>
+    <button id="export">⬇ Export corrected.json</button>
+  </div>
+  <div class="row">
+    <span id="word">—</span>
+    <span id="status" class="muted"></span>
+    <span id="progress" class="muted"></span>
+  </div>
+  <canvas id="cv" width="900" height="240"></canvas>
+</div>
+
+<script>
+const PAD = 24;
+let data = [], i = 0, drag = -1, baseCuts = {};
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const $ = id => document.getElementById(id);
+
+// fit-to-canvas transform for the current word's points (data-space -> pixels)
+function transform(pts) {
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const sx = (cv.width - 2 * PAD) / Math.max(1e-6, x1 - x0);
+  const sy = (cv.height - 2 * PAD) / Math.max(1e-6, y1 - y0);
+  const s = Math.min(sx, sy);
+  return {
+    toX: dx => PAD + (dx - x0) * s,
+    toY: dy => PAD + (dy - y0) * s,
+    fromX: px => (px - PAD) / s + x0,
+  };
+}
+
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (!data.length) return;
+  const w = data[i], T = transform(w.points);
+  // pen path (light)
+  ctx.strokeStyle = "#222"; ctx.lineWidth = 1.5; ctx.beginPath();
+  w.points.forEach((p, k) => {
+    const X = T.toX(p[0]), Y = T.toY(p[1]);
+    k === 0 ? ctx.moveTo(X, Y) : ctx.lineTo(X, Y);
+  });
+  ctx.stroke();
+  // cut lines (red, draggable)
+  ctx.strokeStyle = "#d00"; ctx.lineWidth = 2;
+  (w.cuts || []).forEach(c => {
+    const X = T.toX(c);
+    ctx.beginPath(); ctx.moveTo(X, 6); ctx.lineTo(X, cv.height - 6); ctx.stroke();
+    ctx.fillStyle = "#d00"; ctx.fillRect(X - 4, 6, 8, 8);
+  });
+  const need = w.text.length - 1, have = (w.cuts || []).length;
+  $("word").textContent = `"${w.text}"`;
+  $("status").innerHTML = have === need
+    ? `<span class="ok">${have}/${need} cuts ✓</span>`
+    : `<span class="bad">${have}/${need} cuts</span>`;
+  $("progress").textContent = `word ${i + 1} / ${data.length}`;
+}
+
+function nearestCut(px) {
+  if (!data.length) return -1;
+  const w = data[i], T = transform(w.points);
+  let best = -1, bestd = 10;  // within 10px
+  (w.cuts || []).forEach((c, k) => { const d = Math.abs(T.toX(c) - px); if (d < bestd) { bestd = d; best = k; } });
+  return best;
+}
+
+cv.addEventListener("mousedown", e => {
+  if (!data.length) return;
+  const px = e.offsetX * (cv.width / cv.getBoundingClientRect().width);
+  const k = nearestCut(px);
+  if (e.shiftKey && k >= 0) { data[i].cuts.splice(k, 1); draw(); return; }  // shift-click deletes
+  drag = k;
+});
+cv.addEventListener("mousemove", e => {
+  if (drag < 0 || !data.length) return;
+  const rect = cv.getBoundingClientRect();
+  const px = e.offsetX * (cv.width / rect.width);
+  data[i].cuts[drag] = transform(data[i].points).fromX(px);
+  draw();
+});
+window.addEventListener("mouseup", () => { if (drag >= 0) { data[i].cuts.sort((a, b) => a - b); drag = -1; draw(); } });
+cv.addEventListener("dblclick", e => {  // add a cut
+  if (!data.length) return;
+  const px = e.offsetX * (cv.width / cv.getBoundingClientRect().width);
+  data[i].cuts.push(transform(data[i].points).fromX(px));
+  data[i].cuts.sort((a, b) => a - b);
+  draw();
+});
+
+$("file").addEventListener("change", e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { data = JSON.parse(r.result); data.forEach(w => baseCuts[w.text + w.points.length] = (w.cuts || []).slice()); i = 0; draw(); };
+  r.readAsText(f);
+});
+$("next").onclick = () => { if (i < data.length - 1) { i++; draw(); } };
+$("prev").onclick = () => { if (i > 0) { i--; draw(); } };
+$("skip").onclick = () => { if (data.length) { data[i].skip = true; if (i < data.length - 1) i++; draw(); } };
+$("auto").onclick = () => { if (data.length) { data[i].cuts = (baseCuts[data[i].text + data[i].points.length] || []).slice(); draw(); } };
+$("export").onclick = () => {
+  const keep = data.filter(w => !w.skip);
+  const blob = new Blob([JSON.stringify(keep)], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "corrected.json"; a.click();
+};
+window.addEventListener("keydown", e => {
+  if (e.key === "ArrowRight") $("next").click();
+  else if (e.key === "ArrowLeft") $("prev").click();
+});
+draw();
+</script>
+</body>
+</html>
