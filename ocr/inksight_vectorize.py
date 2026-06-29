@@ -29,7 +29,8 @@ import numpy as np
 from PIL import Image
 
 from . import config, paths
-from .pdf_utils import crop_to_box, load_page
+from .pdf_utils import crop_to_box, load_page, mask_crop_to_box
+from .vectorize import clean_word
 
 _PROMPT = "Recognize and derender."
 _FALLBACK_PROMPT = "Derender the ink."
@@ -185,6 +186,41 @@ def vectorize_crop_inksight(crop: Image.Image, rich: bool = False) -> list[list[
     return strokes_to_points_rich(strokes, gray, dt)
 
 
+def _crop_for_box(page: Image.Image, box_2d: list[int], padding: int, pad_frac: float, clean: bool):
+    """The cleanest possible single-word image to feed InkSight.
+
+    ``clean=True`` (default): ``clean_word`` strips ruled lines / scan bands and the
+    rows above/below, then ``mask_crop_to_box`` isolates the target word horizontally
+    (drops a ligatured neighbour). Without this, ruled lines pass straight through to the
+    derenderer (the noise seen on the first full-page GPU run). ``clean=False`` falls back
+    to the plain ink-fit + box mask.
+    """
+    if clean:
+        clean_gray, _binary, cb = clean_word(page, box_2d, padding, pad_frac)
+        return mask_crop_to_box(
+            clean_gray,
+            box_2d,
+            page.size,
+            cb[0],
+            cb[1],
+            config.CROP_MASK_HPAD,
+            config.CROP_MASK_VPAD_UP,
+            config.CROP_MASK_VPAD_DN,
+        )
+    crop, _ = crop_to_box(
+        page,
+        box_2d,
+        padding,
+        pad_frac,
+        fit_ink=True,
+        mask_to_box=True,
+        mask_hpad=config.CROP_MASK_HPAD,
+        mask_vpad_up=config.CROP_MASK_VPAD_UP,
+        mask_vpad_dn=config.CROP_MASK_VPAD_DN,
+    )
+    return crop
+
+
 def vectorize_boxes_inksight(
     pdf_path: str,
     boxes: list[dict],
@@ -193,34 +229,26 @@ def vectorize_boxes_inksight(
     padding: int | None = None,
     pad_frac: float | None = None,
     fit_ink: bool | None = None,
+    clean: bool | None = None,
     limit: int | None = None,
     rich: bool = False,
 ) -> list[dict]:
     """Add ``{points, metadata}`` to each box via InkSight derendering, in place.
 
-    Crops are masked to the target word (``mask_to_box=True``) so the model sees one
-    word. ``rich`` adds width+intensity channels (see ``strokes_to_points_rich``).
-    Returns ``boxes`` (same schema as ``vectorize.vectorize_boxes``).
+    Each crop is cleaned (ruled lines / bands / neighbour rows removed, then masked to
+    the target word) so the model sees one word — see ``_crop_for_box``. ``rich`` adds
+    width+intensity channels. Returns ``boxes`` (same schema as ``vectorize.vectorize_boxes``).
     """
     padding = config.CROP_PADDING if padding is None else padding
     pad_frac = config.CROP_PAD_FRAC if pad_frac is None else pad_frac
     fit_ink = config.CROP_FIT_INK if fit_ink is None else fit_ink
+    clean = config.CROP_CLEAN if clean is None else clean
     page = load_page(pdf_path, page_index, dpi=dpi)
     processed = 0
     for entry in boxes if limit is None else boxes[:limit]:
         if "box_2d" not in entry:
             continue
-        crop, _ = crop_to_box(
-            page,
-            entry["box_2d"],
-            padding,
-            pad_frac,
-            fit_ink,
-            mask_to_box=True,
-            mask_hpad=config.CROP_MASK_HPAD,
-            mask_vpad_up=config.CROP_MASK_VPAD_UP,
-            mask_vpad_dn=config.CROP_MASK_VPAD_DN,
-        )
+        crop = _crop_for_box(page, entry["box_2d"], padding, pad_frac, clean)
         points = vectorize_crop_inksight(crop, rich=rich)
         entry["points"] = points
         entry["metadata"] = {
@@ -254,6 +282,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Emit [x,y,pen,width,intensity] (thickness+faintness) instead of [x,y,pen]",
     )
+    p.add_argument(
+        "--no-clean",
+        dest="clean",
+        action="store_false",
+        default=config.CROP_CLEAN,
+        help="Skip ruled-line/band/neighbour cleaning (clean_word) before derendering",
+    )
     return p.parse_args(argv)
 
 
@@ -271,7 +306,13 @@ def main(argv: list[str] | None = None) -> None:
     with open(boxes_path) as f:
         boxes = json.load(f)
     vectorize_boxes_inksight(
-        args.pdf, boxes, args.page - 1, dpi=args.dpi, limit=args.limit, rich=args.rich
+        args.pdf,
+        boxes,
+        args.page - 1,
+        dpi=args.dpi,
+        limit=args.limit,
+        rich=args.rich,
+        clean=args.clean,
     )
     out = args.output or paths.strokes_json(args.pdf, args.page, version, root)
     paths.ensure_parent(out)
