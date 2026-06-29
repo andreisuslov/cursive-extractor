@@ -9,6 +9,23 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 (autonomous) — recognition gate insufficient → pivot to building N3/N4
+
+Added a per-letter recognition gate to the harvester (`harvest(..., recognizer, rec_threshold)`):
+keep a glyph only if the font-template recognizer's `score_char(slice, label) >= thresh`.
+**Result: insufficient.** At 0.5 it kept 891/1051 letters (85%) and the rendered glyphs are
+still mostly garbage — the font recognizer can't separate clean letters from mis-cuts (the M11
+wall, now confirmed from every angle: 3 cutters + geometric gate + recognition gate). Automatic
+per-letter extraction of connected cursive is **not solvable with the tools here**.
+
+**Decision (autonomous run):** stop fighting the cutter. Build the **unbuilt back half of the
+roadmap — N3 (cluster letters into variants) + N4 (font assembly + render)** — end to end on
+best-effort harvested letters. This proves the whole font pipeline works and isolates the one
+real remaining blocker as **clean letter *supply*** (solvable later via human-in-the-loop review
+or a stronger recognizer), rather than leaving N3/N4 unbuilt. A partial/rough end-to-end demo
+(type text -> render in the harvested hand) is a genuine milestone; quality scales with letter
+supply.
+
 ## 2026-06-28 — #2: confidence-gated harvester built; output still garbage (the judge is missing)
 
 Built `_letter_harvest.py`: cut each word, score the cut's confidence (snapped-fraction +

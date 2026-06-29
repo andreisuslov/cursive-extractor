@@ -58,16 +58,27 @@ def segment_with_confidence(points: list[list[float]], text: str):
     return letters, confidence(letters, snapped)
 
 
-def harvest(strokes_path: str, threshold: float = 0.6):
-    """Accumulate confident per-letter glyphs from a page's strokes.json.
+def _letter_recog_score(seg_pts: list[list[float]], ch: str, recognizer) -> float:
+    """Recognizer score for a single harvested letter slice vs its label ``ch`` (0 if blank)."""
+    r = ls._rasterize(seg_pts)
+    if r is None:
+        return 0.0
+    return recognizer.score_char(r[0], ch)
 
-    Returns ``(library, stats)`` where ``library`` maps each char to a list of normalized
-    glyph point-lists, and ``stats`` reports words seen/kept.
+
+def harvest(strokes_path: str, threshold: float = 0.6, recognizer=None, rec_threshold: float = 0.0):
+    """Accumulate per-letter glyphs from a page's strokes.json.
+
+    Two gates: a word-level geometric ``threshold`` (cut confidence) and, when a
+    ``recognizer`` is given, a per-letter RECOGNITION gate -- a letter slice is kept only if
+    ``recognizer.score_char(slice, label) >= rec_threshold``. The recognition gate is what
+    actually separates clean letters from mis-cuts (geometry alone can't, see WORKLOG).
+    Returns ``(library, stats)``: ``library`` maps char -> list of normalized glyphs.
     """
     with open(strokes_path) as f:
         data = [b for b in json.load(f) if b.get("points")]
     library: dict[str, list[list[list[float]]]] = {}
-    total = kept = 0
+    total = kept = letters_seen = letters_kept = 0
     for b in data:
         text = b["metadata"]["asciiSequence"]
         if not re.fullmatch(r"[A-Za-z]+", text):  # alphabetic words only
@@ -78,9 +89,22 @@ def harvest(strokes_path: str, threshold: float = 0.6):
             continue
         kept += 1
         for ch, seg_pts in zip(text, letters, strict=False):
-            if seg_pts:
-                library.setdefault(ch, []).append(normalize_letter(seg_pts))
-    return library, {"total_words": total, "kept_words": kept}
+            if not seg_pts:
+                continue
+            letters_seen += 1
+            if (
+                recognizer is not None
+                and _letter_recog_score(seg_pts, ch, recognizer) < rec_threshold
+            ):
+                continue
+            letters_kept += 1
+            library.setdefault(ch, []).append(normalize_letter(seg_pts))
+    return library, {
+        "total_words": total,
+        "kept_words": kept,
+        "letters_seen": letters_seen,
+        "letters_kept": letters_kept,
+    }
 
 
 def coverage_report(library: dict[str, list], need: int = 3) -> str:
@@ -99,11 +123,22 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--need", type=int, default=3, help="samples per letter the font wants")
     p.add_argument("--out", default=None, help="Save the harvested library JSON here")
     p.add_argument("--render", default=None, help="Render harvested samples of a few letters here")
+    p.add_argument("--recognize", action="store_true", help="Add a per-letter recognition gate")
+    p.add_argument(
+        "--rec-threshold", type=float, default=0.5, help="min recognizer score per letter"
+    )
     args = p.parse_args(argv)
 
-    library, stats = harvest(args.strokes, args.threshold)
+    recognizer = None
+    if args.recognize:
+        from . import _recognizer
+
+        recognizer = _recognizer.get_recognizer()
+    library, stats = harvest(args.strokes, args.threshold, recognizer, args.rec_threshold)
     print(
-        f"words: {stats['total_words']} seen, {stats['kept_words']} kept (conf>={args.threshold})"
+        f"words: {stats['total_words']} seen, {stats['kept_words']} kept (conf>={args.threshold}); "
+        f"letters: {stats['letters_seen']} seen, {stats['letters_kept']} kept"
+        + (f" (recog>={args.rec_threshold})" if recognizer else "")
     )
     print(coverage_report(library, args.need))
     if args.out:
