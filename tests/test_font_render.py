@@ -23,3 +23,16 @@ def test_render_text_writes_file(tmp_path):
     out = tmp_path / "r.png"
     fr.render_text({"a": [_G, _G]}, "aa", str(out))
     assert out.exists() and out.stat().st_size > 0
+
+
+def test_glyph_box_ascender_taller_than_xheight():
+    assert fr.glyph_box("l")[0] > fr.glyph_box("a")[0]
+
+
+def test_glyph_box_descender_drops_below_baseline():
+    assert fr.glyph_box("g")[1] < 0
+    assert fr.glyph_box("a")[1] == 0.0
+
+
+def test_glyph_box_capital_rises_to_ascent():
+    assert fr.glyph_box("A")[0] == fr.glyph_box("l")[0]

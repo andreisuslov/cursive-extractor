@@ -6,11 +6,10 @@ stamped (the "dynamic" in dynamic font), and draw a join between consecutive gly
 ligature). This is the font BACKEND / generation step (roadmap N4-N5): type text, get it in the
 writer's hand.
 
-Prototype limitations (honest): glyphs were bbox-normalized in harvesting, so per-letter width
-and ascender/descender height are lost -- every glyph renders in a unit cell (even advance, even
-height). Real kerning/baseline needs those preserved upstream. And output quality is gated by
-the harvested glyphs (currently rough -- see WORKLOG). What this proves: the variant-rotation +
-placement + join machinery works end-to-end.
+Glyphs are aspect-preserved, placed on a real baseline with a label-based ascender/descender/
+x-height heuristic (`glyph_box`); joins only drawn between nearby endpoints. Output quality is
+still gated by the input glyphs (rough from diary cuts -- see WORKLOG; clean on font-traced
+letters -- see `font_backend_demo.png`).
 
     python -m ocr.experiments._font_render --variants variants.json --text "the baby" --out out.png
 """
@@ -35,8 +34,23 @@ def variant_sequence(variants: dict[str, list], text: str) -> list[tuple[str, in
     return out
 
 
+_ASCENDERS = set("bdfhklt")
+_DESCENDERS = set("gjpqy")
+
+
+def glyph_box(key: str, xheight: float = 0.5, ascent: float = 1.0, descent: float = 0.35):
+    """(top, bottom) plot-y for a letter on a baseline at y=0: ascenders/capitals rise to
+    ``ascent``, descenders drop to ``-descent``, the rest fill the x-height. A cheap, dep-free
+    typography heuristic — no per-glyph baseline metadata needed."""
+    if key in _ASCENDERS or key.isupper():
+        return ascent, 0.0
+    if key in _DESCENDERS:
+        return xheight, -descent
+    return xheight, 0.0
+
+
 def render_text(variants: dict[str, list], text: str, out_path: str, join: bool = True) -> str:
-    """Render ``text`` in the harvested hand to ``out_path``. Returns the path."""
+    """Render ``text`` in the harvested hand to ``out_path`` on a real baseline. Returns path."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -54,16 +68,24 @@ def render_text(variants: dict[str, list], text: str, out_path: str, join: bool 
             x_off += space
             prev_end = None
             continue
-        a = np.array(variants[key][idx], float)
-        gx = a[:, 0] + x_off
-        gy = -a[:, 1]
-        if join and prev_end is not None:  # cursive ligature to this glyph's start
+        a = np.array(variants[key][idx], float)  # x in [0,aspect], y in [0,1] (0 top, 1 bottom)
+        top, bot = glyph_box(key)
+        sf = top - bot  # scale height to the letter's band (x scaled too -> aspect preserved)
+        gx = a[:, 0] * sf + x_off
+        gy = top - a[:, 1] * sf  # glyph-top -> top, glyph-bottom -> bot (baseline at y=0)
+        # cursive ligature, but only when endpoints are actually close (traced glyphs don't
+        # start/end at clean entry/exit points, so a far join is just a stray diagonal)
+        if (
+            join
+            and prev_end is not None
+            and np.hypot(gx[0] - prev_end[0], gy[0] - prev_end[1]) < 0.3
+        ):
             ax.plot(
                 [prev_end[0], gx[0]], [prev_end[1], gy[0]], "-", color="black", lw=1.0, alpha=0.7
             )
         ax.plot(gx, gy, "-", color="black", lw=1.3, solid_capstyle="round")
         prev_end = (gx[-1], gy[-1])
-        x_off += float(a[:, 0].max()) + intra_gap  # advance by this glyph's actual width
+        x_off += float(a[:, 0].max()) * sf + intra_gap  # advance by this glyph's actual width
     ax.set_aspect("equal")
     ax.axis("off")
     ax.set_xlim(-0.3, x_off + 0.3)

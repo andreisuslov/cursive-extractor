@@ -9,6 +9,17 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 (autonomous) — #2 render fidelity (baseline + ascenders/descenders)
+
+`_font_render.glyph_box`: a dep-free, label-based typography heuristic — ascenders (bdfhklt) +
+capitals rise to full ascent, descenders (gjpqy) drop below a baseline at y=0, the rest fill the
+x-height; glyphs scaled to their band (aspect preserved). Joins now only drawn between nearby
+endpoints (traced glyphs don't start/end at clean entry/exit points, so far joins were stray
+diagonals). The clean font-traced demo now reads as cursive on a real baseline
+(`font_backend_demo.png` updated). No upstream plumbing / no per-glyph baseline metadata needed.
+
+---
+
 ## 2026-06-28 (autonomous) — #1 real font export (SVG glyph assets)
 
 `_font_export.py`: variant library → `paths.json` (char → SVG path strings) + `specimen.svg`
