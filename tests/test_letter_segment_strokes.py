@@ -45,3 +45,22 @@ def test_forced_align_returns_L_segments_preserving_points():
     letters = ls.forced_align_word_strokes(pts, "ab")  # builds recognizer (DejaVu fallback on CI)
     assert len(letters) == 2
     assert sum(len(s) for s in letters) == 4
+
+
+def test_pen_lift_x():
+    pts = [[0.1, 0.5, 1], [0.2, 0.5, 1], [0.2, 0.5, 0], [0.8, 0.5, 1], [0.8, 0.5, 0]]
+    assert ls._pen_lift_x(pts) == [0.2, 0.8]
+
+
+def test_baseline_valleys_finds_the_low_dip():
+    # y grows downward; the dip to y=0.9 between two letters is a local y-maximum (valley)
+    pts = [[0.0, 0.2, 1], [0.1, 0.3, 1], [0.2, 0.9, 1], [0.3, 0.3, 1], [0.4, 0.2, 1]]
+    assert 0.2 in ls._baseline_valleys(pts, win=1)
+
+
+def test_trajectory_cut_returns_L_segments_preserving_points():
+    # two arches with a baseline dip between -> 2 letters, all 5 down-points kept
+    pts = [[0.0, 0.3, 1], [0.1, 0.9, 1], [0.2, 0.3, 1], [0.3, 0.9, 1], [0.4, 0.3, 1], [0.4, 0.3, 0]]
+    letters = ls.trajectory_cut_word(pts, "ab")
+    assert len(letters) == 2
+    assert sum(len(s) for s in letters) == 5

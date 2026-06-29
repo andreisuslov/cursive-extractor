@@ -9,6 +9,26 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 — #2: trajectory-cue cutter + the reframe (cut quality is the hard problem)
+
+Added a third, recognizer-free cutter: `trajectory_cut_word` proposes cuts from **pen-lifts +
+baseline-valley minima** (the ligature dips between cursive letters) and snaps the L-1
+width-prior boundaries to the nearest candidate. Three-way render (baseline | forced-align |
+trajectory) + tests.
+
+**Honest result: all three run, none reliably hits true letter boundaries.** Cursive letters
+overlap in x and m/n/u/w have *internal* valleys, so cuts stay ambiguous even on a clean
+trajectory — the same wall M10-M13 hit on ink. Knowing L + width-prior helps but doesn't
+resolve it.
+
+**Reframe (the useful takeaway):** the FONT goal doesn't need every word cut perfectly — it
+needs **≥3 confident samples per letter**. So stop chasing a perfect every-word cutter and
+build a **confidence-gated harvester**: keep only cuts we're sure of (clean pen-lift-separated
+letters; words where valleys align crisply with the width prior), discard the ambiguous ones,
+and accumulate per-letter variants until each letter has enough. That turns an unsolved
+"segment everything" problem into a tractable "collect the easy wins" one — and is the natural
+bridge to N3 (variant clustering) / N4 (font).
+
 ## 2026-06-28 — #2 progress: forced-alignment letter cutter on trajectories (marginal)
 
 Built the real cutter for #2: `forced_align_word_strokes` in `_letter_segment_strokes.py`

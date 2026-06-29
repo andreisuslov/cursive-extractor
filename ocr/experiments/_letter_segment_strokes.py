@@ -11,9 +11,16 @@ index 2; pen-up markers have pen==0). Output is L lists of points, one per lette
 
     python -m ocr.experiments._letter_segment_strokes --strokes <strokes.json> [--n 12]
 
-This is a BASELINE (equal-width x bins): honest and crude -- cursive letters vary in width
-and connect, so equal bins mis-cut. It exists to anchor the metric and the render; the next
-step is width-prior / recognizer-guided cuts (reusing ocr.experiments._recognizer).
+Three cutters, compared side by side by the CLI:
+  - ``segment_word_strokes``   -- BASELINE: equal-width x bins (crude anchor).
+  - ``forced_align_word_strokes`` -- recognizer forced-alignment (reuses ``_recognizer``).
+  - ``trajectory_cut_word``    -- pen-lifts + baseline-valley minima, snapped to width-prior.
+
+Honest status (2026-06-28): all three run; none reliably lands on TRUE letter boundaries --
+cursive letters overlap in x and m/n/u/w have internal valleys, so cuts stay ambiguous even
+on a clean path (matches the M10-M13 history: cut quality is the hard problem). The productive
+reframe for the FONT goal: we don't need every word cut perfectly -- only enough CONFIDENT
+per-letter samples (>=3/letter), so gate on cut confidence and harvest those.
 """
 
 import argparse
@@ -24,6 +31,7 @@ import cv2
 import numpy as np
 
 from . import _recognizer
+from . import _segment_prototype as seg
 
 
 def _down_points(points: list[list[float]]) -> list[list[float]]:
@@ -110,6 +118,67 @@ def forced_align_word_strokes(
     return letters
 
 
+def _baseline_valleys(pts: list[list[float]], win: int = 2) -> list[float]:
+    """x of local y-maxima (lowest pen points = ligature valleys), at/below the median y.
+
+    In cursive the pen dips to the baseline between letters; those low points (y is largest,
+    since image-y grows downward) are natural cut candidates. Restricting to y >= median
+    keeps baseline valleys and drops tops-of-letters."""
+    if len(pts) < 2 * win + 1:
+        return []
+    ys = np.array([p[1] for p in pts])
+    xs = [p[0] for p in pts]
+    med = float(np.median(ys))
+    out = []
+    for i in range(win, len(pts) - win):
+        if ys[i] >= med and ys[i] == ys[i - win : i + win + 1].max():
+            out.append(xs[i])
+    return out
+
+
+def _pen_lift_x(points: list[list[float]]) -> list[float]:
+    """x at each pen-up (stroke end) -- a hard, real break in the writing motion."""
+    out, last = [], None
+    for p in points:
+        if len(p) >= 3 and p[2] == 1:
+            last = p[0]
+        elif last is not None:
+            out.append(last)
+            last = None
+    return out
+
+
+def trajectory_cut_word(points: list[list[float]], text: str) -> list[list[list[float]]]:
+    """Cut a word's trajectory into ``len(text)`` letters using TRAJECTORY cues, no recognizer.
+
+    Candidate cuts = pen-lifts + baseline-valley minima (the ligature dips between cursive
+    letters). We know L, so each of the L-1 width-prior expected boundaries snaps to the
+    nearest candidate within ~0.6 letter-widths (else falls back to the expected position).
+    This exploits the ordered pen path the raster recognizer can't see.
+    """
+    pts = _down_points(points)
+    L = len(text)
+    if L <= 1 or len(pts) < L:
+        return segment_word_strokes(points, max(1, L))
+    xs = [p[0] for p in pts]
+    xmin, xmax = min(xs), max(xs)
+    span = max(xmax - xmin, 1e-9)
+    cands = sorted(set(_baseline_valleys(pts) + _pen_lift_x(points)))
+    expected = seg.expected_boundary_x(text, xmin, xmax)  # L-1 width-prior positions
+    snap = 0.6 * span / L
+    min_gap = 0.2 * span / L
+    cuts: list[float] = []
+    for e in expected:
+        near = [c for c in cands if abs(c - e) <= snap and (not cuts or c > cuts[-1] + min_gap)]
+        cuts.append(min(near, key=lambda c: abs(c - e)) if near else e)
+    cuts = sorted(cuts)
+    letters: list[list[list[float]]] = [[] for _ in range(L)]
+    for p in pts:
+        k = min(sum(1 for c in cuts if p[0] >= c), L - 1)
+        letters[k].append(p)
+    return letters
+
+
 def cut_quality(letters: list[list[list[float]]]) -> float:
     """Crude 0-1 proxy: fraction of letter-bins that are non-empty (a real cut should give
     every letter some ink). NOT a recognition metric -- a placeholder until the recognizer
@@ -146,15 +215,15 @@ def main(argv: list[str] | None = None) -> None:
     words = _load_words(args.strokes)[: args.n]
     rows = len(words)
     rec = _recognizer.get_recognizer()
-    _fig, axes = plt.subplots(rows, 2, figsize=(12, 1.8 * rows))
+    _fig, axes = plt.subplots(rows, 3, figsize=(15, 1.8 * rows))
     if rows == 1:
-        axes = axes.reshape(1, 2)
+        axes = axes.reshape(1, 3)
     cmap = plt.colormaps["tab10"]
 
     def draw(ax, letters, title):
-        for k, seg in enumerate(letters):
-            if seg:
-                a = np.array(seg, float)
+        for k, letter_seg in enumerate(letters):
+            if letter_seg:
+                a = np.array(letter_seg, float)
                 ax.scatter(a[:, 0], -a[:, 1], s=4, color=cmap(k % 10))
         ax.set_title(title, fontsize=9)
         ax.set_aspect("equal")
@@ -166,6 +235,7 @@ def main(argv: list[str] | None = None) -> None:
         draw(
             axes[i, 1], forced_align_word_strokes(b["points"], text, rec), f'forced-align "{text}"'
         )
+        draw(axes[i, 2], trajectory_cut_word(b["points"], text), f'trajectory "{text}"')
     plt.tight_layout()
     plt.savefig(args.out, dpi=110, facecolor="white")
     print(f"wrote {args.out}")
