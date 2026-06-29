@@ -9,6 +9,34 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 — First GPU run (InkSight at scale): pipeline works, data mostly noisy
+
+Ran `inksight_vectorize --rich` on a full diary page (0-02 p1, 314 boxes) on a RunPod **L40S**.
+
+**Mechanics: success.** ~**5 s/word** (110 s for 20, incl. load) — **~58× the Mac CPU** (~290 s/word).
+All 314 boxes derendered; ~$1.60 for the session. (Process hung on TF exit after writing the
+output, so the watcher never got a "done" signal — pulled the result manually before the pod's
+auto-terminate; pod torn down. Note: scp is rejected on these hosts → upload/download via
+`ssh "cat > f"` / `ssh "cat f"`; and **zsh doesn't word-split unquoted vars** so ssh `-o` flags
+must be inline.)
+
+**Quality: mostly noisy — corrected an earlier too-rosy read.** Top-of-page cherry-picks
+(Uncle/Aunt/Isabel) are clean, but a representative spread is mostly fragmented/contaminated
+(stacked neighbour rows, ruled lines, unreadable bits). Honest clean fraction is **low (~10-25%
+by eye)**, not "mixed." Causes: (1) loose detection boxes + dense writing → neighbour bleed;
+(2) **`inksight_vectorize` applies `mask_to_box` but NOT ruled-line/band removal (`clean_word`)
+— a real omission**, so ruled lines pass through; (3) InkSight completes stray ink into the word.
+
+**Conclusion:** `diarybank-v2` built from this would be as contaminated as v1. The GPU run's
+value was validating speed/pipeline AND giving a scale-accurate picture: **crop-noise, not
+stroke recovery, is the dominant blocker** — reconfirming the letter-level path. Page strokes
+saved locally at `outputs/<slug>/page_001/<slug>_p001_strokes_inksight.json` (gitignored).
+
+**Next (revised):** (a) quick — add `clean_word` ruled-line/band removal into
+`inksight_vectorize` before derendering; (b) tighten detection boxes (Q2); (c) the real fix —
+N2 letter-level segmentation + reassembly. Don't scale to the full corpus until a single page
+comes out mostly clean.
+
 ## 2026-06-28 — Rendering/noise diagnosis + plan; CI rescued
 
 **CI was red from the first push** (newly-created private repo). Three stacked causes, all
