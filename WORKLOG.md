@@ -9,6 +9,17 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 (autonomous) — #1 real font export (SVG glyph assets)
+
+`_font_export.py`: variant library → `paths.json` (char → SVG path strings) + `specimen.svg`
+(viewable a–z grid). Dep-free string building. Verified on the clean font-traced variants:
+26 letters, 78 paths, and the rasterized specimen shows a clean, readable a–z with 3 distinct
+variants each. These paths drop into a font editor / Calligraphr / opentype.js. OTF with filled
+outlines skipped (needs `fontTools` + stroke→outline) — not worth the dep until there's a clean
+diary alphabet to ship.
+
+---
+
 ## 2026-06-28 (autonomous) — CHECKPOINT: full pipeline built, backend PROVEN, blocker isolated
 
 State after the autonomous block (all committed, CI green, 190 tests):

@@ -15,6 +15,7 @@ covered by `tests/`.
 | Cluster (N3) | `_variant_cluster.py` | k-means → ≤3 medoid variants per letter | ✅ works |
 | Render (N4/N5) | `_font_render.py` | place variant glyphs, cycle variants per repeat, draw joins | ✅ works |
 | Backend demo | `_font_pipeline_demo.py` | proves N3/N4 on clean font-traced letters → `font_backend_demo.png` | ✅ works |
+| Font export | `_font_export.py` | variants → SVG glyph paths (`paths.json`) + `specimen.svg` | ✅ works |
 
 ## The one blocker
 
@@ -55,6 +56,8 @@ python -m ocr.experiments._letter_review ingest --review corrected.json --out li
 python -m ocr.experiments._variant_cluster --library lib.json --k 3 --out variants.json
 # 4. render text in the harvested hand
 python -m ocr.experiments._font_render --variants variants.json --text "hello" --out hello.png
+# 5. export reusable SVG glyph assets (paths.json + specimen.svg)
+python -m ocr.experiments._font_export --variants variants.json --out-dir fontout/
 # backend proof on clean font-traced letters:
 python -m ocr.experiments._font_pipeline_demo --text "the quick brown fox" --out demo.png
 ```
