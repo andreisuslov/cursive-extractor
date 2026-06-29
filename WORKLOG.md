@@ -9,6 +9,32 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-28 (autonomous) — CHECKPOINT: full pipeline built, backend PROVEN, blocker isolated
+
+State after the autonomous block (all committed, CI green, 190 tests):
+
+**Built end-to-end** (`ocr/experiments/README.md` documents + how-to):
+- Vectorize (InkSight, GPU, `--rich`), crop-clean (`clean_word`+mask).
+- 3 letter cutters + confidence/recognition-gated harvester (`_letter_segment_strokes`, `_letter_harvest`).
+- N3 variant clustering (`_variant_cluster`), N4/N5 dynamic-font render with variant rotation +
+  joins (`_font_render`), aspect-preserving glyphs.
+
+**PROVEN:** `_font_pipeline_demo` feeds clean letters (traced from cursive fonts) through the real
+N3/N4 → **readable, joined, variant-rotated "the quick brown fox"** (`ocr/experiments/font_backend_demo.png`).
+So the font backend WORKS; the goal is reachable given clean letters.
+
+**The one blocker — clean per-letter glyph SUPPLY from diary cursive:** unsolved. 3 cutters +
+geometric gate + recognition gate all fail; even single-letter words don't yield textbook glyphs
+(only 'a' appears as a single-letter word on the test page anyway). Confirmed at every level.
+
+**Decision the user faces (3 paths, in `experiments/README.md`):** (1) human-in-the-loop cut
+review, (2) letter-template collection (sidesteps cutting; reuses the collect tools — likely the
+fastest route to a real font), (3) a much stronger recogniser/HTR (needs more labelled data).
+
+**Continuing autonomously:** building the human-in-the-loop cut-review path (Python data contract
+first, then the browser tool) so a human can turn the messy auto-cuts into a clean alphabet — the
+realistic way to get clean supply for one writer's font.
+
 ## 2026-06-28 (autonomous) — N3 + N4 built: the whole font back-half now runs end-to-end
 
 Built the unbuilt back half of the roadmap:
