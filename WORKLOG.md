@@ -35,6 +35,18 @@ fastest route to a real font), (3) a much stronger recogniser/HTR (needs more la
 first, then the browser tool) so a human can turn the messy auto-cuts into a clean alphabet — the
 realistic way to get clean supply for one writer's font.
 
+**HITL done:** `_letter_review.py` (export auto-cuts → `review.json`; ingest corrected → clean
+library; round-trip tested) + `letter_review.html` (drag/add/delete cut lines per word, export
+corrected.json). Verified export on the real page (247 words; "Uncle" → 166 pts, 4 cuts). So the
+clean-supply path now exists end to end: vectorize → review (human fixes cuts) → ingest → N3 → N4.
+
+**To resume (for the user):** pick a supply path (HITL review is built and is the realistic one
+for a single writer; or collect a letter template). Run a writer's pages through
+`inksight_vectorize` (GPU), fix cuts in `letter_review.html`, `ingest` → `_variant_cluster` →
+`_font_render`. The backend is proven (`font_backend_demo.png`); output now scales with how much
+clean letter data you feed it. Per-writer coverage (≥3 of every glyph) will need several pages
+per writer (one page only reliably gives common letters).
+
 ## 2026-06-28 (autonomous) — N3 + N4 built: the whole font back-half now runs end-to-end
 
 Built the unbuilt back half of the roadmap:
