@@ -33,8 +33,7 @@
     <kbd>⌘Z</kbd> undo · <kbd>⌘⇧Z</kbd> redo.</p>
 
   <div class="row">
-    <input type="file" id="file" accept="application/json" />
-    resume <input type="file" id="resume" accept="application/json" title="load a previously exported labels_corrected.json" />
+    load <input type="file" id="file" accept="application/json" title="label_review.json, resume.json, or an exported labels_corrected.json — all work here" />
     <span class="sep"></span>
     <button id="tMove" class="on">Move</button>
     <button id="tCut">+ Cut</button>
@@ -62,7 +61,7 @@
 <script>
 const PAD=16, LBLH=40, HANDLE_HIT=10, SEG_HIT=8;
 let words=[], i=0, page=new Image(), base={}, tool="move", drag=null, erasing=false;
-let undoStack=[], redoStack=[], sig=null, saveT=null;
+let undoStack=[], redoStack=[], sig=null, saveT=null, pageURL=null;
 const clone=o=>JSON.parse(JSON.stringify(o));
 const cv=document.getElementById("cv"), ctx=cv.getContext("2d"), $=id=>document.getElementById(id);
 const COLORS=["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
@@ -168,23 +167,25 @@ function go(d){ i=Math.max(0,Math.min(words.length-1,i+d)); draw(); }
 $("prev").onclick=()=>go(-1); $("next").onclick=()=>go(1);
 $("done").onclick=()=>{ if(words.length){words[i].done=true;words[i].skip=false;go(1);} };
 $("skip").onclick=()=>{ if(words.length){words[i].skip=true;go(1);} };
-$("export").onclick=()=>{ const out=words.filter(w=>!w.skip).map(w=>({text:w.text,box:w.box,cuts:w.cuts.slice().sort((a,b)=>cutX(a)-cutX(b)),erase:w.erase||[],done:!!w.done}));
+$("export").onclick=()=>{ const out={page:pageURL, words: words.map(w=>({text:w.text,box:w.box,cuts:w.cuts.slice().sort((a,b)=>cutX(a)-cutX(b)),erase:w.erase||[],done:!!w.done,skip:!!w.skip}))};
   const b=new Blob([JSON.stringify(out)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="labels_corrected.json"; a.click(); };
+// merge a saved-edits array ([{text,box,cuts,erase,done}]) onto the loaded words, matched by text in order
+function applyEdits(saved){ let j=0,n=0;
+  for(let k=0;k<words.length && j<saved.length;k++){ if(words[k].text===saved[j].text){ const s=saved[j++];
+    if(s.cuts) words[k].cuts=clone(s.cuts); words[k].erase=clone(s.erase||[]); words[k].done=!!s.done; words[k].skip=!!s.skip; if(s.box)words[k].box=clone(s.box); words[k].paper=null; n++; } }
+  return n; }
+function loadDoc(data){                                  // {page, words}: fresh review OR self-contained export
+  pageURL=data.page; words=data.words; undoStack=[]; redoStack=[]; i=0;
+  words.forEach((w,k)=>{ if(typeof (w.cuts[0])==="number") w.cuts=w.cuts.map(x=>[[x,0],[x,w.box[3]-w.box[1]]]); base[k]=clone(w.cuts); w.erase=w.erase||[]; });
+  sig="ll:"+words.length+":"+(words[0]?.text||"")+":"+(words[words.length-1]?.text||"");
+  try{ const sv=localStorage.getItem(sig); if(sv && confirm("This browser has newer auto-saved progress for this page. Restore it?")) applyEdits(JSON.parse(sv)); }catch(_e){}
+  page=new Image(); page.onload=()=>{i=0;draw();}; page.src=pageURL; }
+// one loader for everything: a full {page,words} doc, or a legacy page-less edits array
 $("file").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
-  r.onload=()=>{ const data=JSON.parse(r.result); words=data.words; undoStack=[]; redoStack=[];
-    words.forEach((w,k)=>{ if(typeof (w.cuts[0])==="number") w.cuts=w.cuts.map(x=>[[x,0],[x,w.box[3]-w.box[1]]]); base[k]=clone(w.cuts); w.erase=w.erase||[]; });
-    sig="ll:"+words.length+":"+(words[0]?.text||"")+":"+(words[words.length-1]?.text||"");
-    try{ const sv=localStorage.getItem(sig);                       // auto-restore prior progress
-      if(sv && confirm("Restore your saved progress for this page?")){ JSON.parse(sv).forEach((s,k)=>{
-        if(words[k]&&words[k].text===s.text){ words[k].cuts=clone(s.cuts); words[k].erase=clone(s.erase||[]); words[k].done=!!s.done; if(s.box)words[k].box=clone(s.box); } }); } }catch(_e){}
-    page=new Image(); page.onload=()=>{i=0;draw();}; page.src=data.page; };
-  r.readAsText(f); });
-// Resume: merge a previously exported labels_corrected.json onto the loaded words (matched by text, in order)
-$("resume").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f||!words.length)return; const r=new FileReader();
-  r.onload=()=>{ let saved; try{saved=JSON.parse(r.result);}catch(_e){alert("Not valid JSON");return;} let j=0,n=0;
-    for(let k=0;k<words.length && j<saved.length;k++){ if(words[k].text===saved[j].text){ const s=saved[j++];
-      words[k].cuts=clone(s.cuts); words[k].erase=clone(s.erase||[]); words[k].done=!!s.done; if(s.box)words[k].box=clone(s.box); words[k].paper=null; n++; } }
-    i=0; draw(); alert("Resumed "+n+" of "+saved.length+" saved words."); };
+  r.onload=()=>{ let data; try{data=JSON.parse(r.result);}catch(_e){alert("Not valid JSON");return;}
+    if(Array.isArray(data)){ if(!words.length||!pageURL){ alert("This file has labels only (no page). Load label_review.json / resume.json first, then this to merge."); return; }
+      const n=applyEdits(data); draw(); alert("Merged "+n+" words onto the loaded page."); }
+    else loadDoc(data); };
   r.readAsText(f); });
 window.addEventListener("keydown",e=>{ if(!words.length) return;
   if((e.metaKey||e.ctrlKey) && (e.key==="z"||e.key==="Z")){ e.preventDefault(); e.shiftKey?redo():undo(); return; }

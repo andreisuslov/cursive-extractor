@@ -66,10 +66,13 @@ python -m ocr.experiments.label_ingest --corrected labels_corrected.json --page-
   for curves, ⇧-click a handle to delete), slices coloured + labelled from the spelling (you only
   fix cuts; cuts auto-order left→right). **⌘Z / ⌘⇧Z** undo/redo, **⌘space** next, `⏎` done+next,
   `s` skip. An **Eraser** paints over non-letter ink and fills it with the word's **paper colour**
-  (median of the crop) so it blends in — instant, no model. Exports `{text, box, cuts(polylines), erase}`.
+  (median of the crop) so it blends in — instant, no model. A **Pan img** tool + **grow/shrink box**
+  reframe a mis-captured word. **One loader** for everything (fresh `label_review.json` or a
+  self-contained export); progress **auto-saves** to the browser. Exports a self-contained
+  `{page, words:[{text, box, cuts(polylines), erase, done, skip}]}` (doubles as a resume file).
 - `label_export.py` / `label_ingest.py` — feed the tool (CRAFT cuts) / turn corrections into labeled
-  per-letter crops (polygon-masked; outside-polygon + erased pixels filled with the paper colour) —
-  clean supply for the font pipeline + real CRAFT weak-sup GT.
+  per-letter crops (polygon-masked; outside-polygon + erased pixels filled with the paper colour;
+  uses the export's embedded page, skips `skip` words) — clean supply for the font pipeline + CRAFT GT.
 
 ## The one blocker
 

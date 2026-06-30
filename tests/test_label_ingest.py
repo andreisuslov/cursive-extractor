@@ -43,3 +43,14 @@ def test_ingest_eraser_fills_with_paper_colour():
     a_crop = ingest(corrected, page)[0][1]  # 'a' spans crop-local x 0..60, contains the blob
     assert not (a_crop == 30).any()  # ink erased
     assert (a_crop == 200).any()  # filled with the paper colour (not flat white)
+
+
+def test_ingest_accepts_dict_doc_and_skips_skipped_words():
+    page = np.full((40, 140, 3), 200, np.uint8)
+    doc = {
+        "words": [
+            {"text": "ab", "box": [10, 5, 110, 25], "cuts": [[[50, 0], [50, 20]]], "skip": True},
+            {"text": "cd", "box": [10, 5, 110, 25], "cuts": [[[50, 0], [50, 20]]]},
+        ]
+    }
+    assert [c for c, _ in ingest(doc, page)] == ["c", "d"]  # 'ab' skipped

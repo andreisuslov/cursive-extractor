@@ -9,6 +9,19 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-30 — labeller: pan-image + one self-contained loader (don't-lose-work fix)
+
+Two fixes after user feedback. (1) **Pan/move the underlying image** (a "Pan img" tool) + grow/shrink
+box, so a mis-captured word (e.g. "John", whose detection box clipped it) can be reframed; the new
+box exports and `label_ingest` crops it. (2) **Loading was broken + clunky**: `labels_corrected.json`
+had no page image (just an edits array), so loading it alone rendered nothing, and there were two
+file inputs. Now **one loader** handles any file (a `{page,words}` doc — fresh review or a
+self-contained export — renders directly; a legacy page-less array merges onto the loaded page), and
+**export is self-contained** (`{page, words}` with all words + a skip flag, doubling as a resume
+file). Plus localStorage auto-save. `label_ingest` accepts the dict form, decodes the embedded page
+(no `--page-dir` needed), and skips `skip` words. Rescued the user's in-progress page-1 work by
+merging their page-less export with the page into `resume.json`. node-checked; tests updated.
+
 ## 2026-06-30 — reverted Moebius inpaint → paper-colour eraser (too slow)
 
 The in-browser Moebius inpaint was too slow to work with, so removed it entirely (no ONNX/WebGPU/

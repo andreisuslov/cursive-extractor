@@ -4,8 +4,9 @@ Splits each word's page-box at the confirmed cuts and labels each slice from the
 per-letter crops. This is the CLEAN, human-verified supply for (a) the font pipeline and (b) real
 CRAFT weak-supervision GT (far better than self-labels, which didn't help — see WORKLOG).
 
-    python -m ocr.experiments.label_ingest --corrected labels_corrected.json \
-        --page-dir outputs/<pdf>/page_001 --out-dir letters/
+    python -m ocr.experiments.label_ingest --corrected labels_corrected.json --out-dir letters/
+    # the exported file is self-contained (carries the page); add --page-dir only for a legacy
+    # page-less edits array.
 """
 
 import argparse
@@ -42,8 +43,11 @@ def ingest(corrected, page_rgb):
     import cv2
     import numpy as np
 
+    words = corrected["words"] if isinstance(corrected, dict) else corrected
     letters = []
-    for w in corrected:
+    for w in words:
+        if w.get("skip"):
+            continue
         x0, y0, x1, y1 = w["box"]
         bw, bh = x1 - x0, y1 - y0
         src = page_rgb[y0:y1, x0:x1]
@@ -65,6 +69,9 @@ def ingest(corrected, page_rgb):
 
 
 def main(argv=None):
+    import base64
+    import io
+
     import numpy as np
     from PIL import Image
 
@@ -72,13 +79,23 @@ def main(argv=None):
     p.add_argument(
         "--corrected", required=True, help="labels_corrected.json from letter_label.html"
     )
-    p.add_argument("--page-dir", required=True, help="page dir with *_page.png (for the image)")
+    p.add_argument(
+        "--page-dir",
+        default=None,
+        help="page dir with *_page.png (only if the file has no embedded page)",
+    )
     p.add_argument("--out-dir", default="letters", help="where to write labeled letter crops")
     args = p.parse_args(argv)
 
     with open(args.corrected) as f:
         corrected = json.load(f)
-    page = np.array(Image.open(glob.glob(f"{args.page_dir}/*_page.png")[0]).convert("RGB"))
+    if isinstance(corrected, dict) and corrected.get("page"):  # self-contained export
+        raw = base64.b64decode(corrected["page"].split(",", 1)[1])
+        page = np.array(Image.open(io.BytesIO(raw)).convert("RGB"))
+    elif args.page_dir:
+        page = np.array(Image.open(glob.glob(f"{args.page_dir}/*_page.png")[0]).convert("RGB"))
+    else:
+        p.error("corrected file has no embedded page; pass --page-dir")
     os.makedirs(args.out_dir, exist_ok=True)
     manifest = []
     for n, (ch, crop) in enumerate(ingest(corrected, page)):
