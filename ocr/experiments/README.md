@@ -10,12 +10,40 @@ covered by `tests/`.
 |---|---|---|---|
 | Vectorize | `ocr/inksight_vectorize.py` | crop → clean pen strokes via **InkSight** derendering (GPU); `--rich` adds width/intensity | ✅ works |
 | Clean crop | (in vectorize) `clean_word` + `mask_crop_to_box` | strip ruled lines/bands, isolate one word | ✅ partial |
-| Cut → letters | `_letter_segment_strokes.py` | 3 cutters: equal-x baseline, recognizer forced-align, trajectory (pen-lifts + baseline valleys) | ⚠️ **unsolved** |
+| Cut → letters (geometry) | `_letter_segment_strokes.py` | 3 cutters: equal-x baseline, recognizer forced-align, trajectory | ⚠️ failed on cursive |
+| **Cut → letters (CRAFT)** | `craft_segmenter.py` + `craft_train.py` | fine-tuned CRAFT char-region → L-1 cuts via known spelling | ✅ **works** (see below) |
 | Harvest | `_letter_harvest.py` | confidence- + recognition-gated per-letter collection | ⚠️ gated by cuts |
 | Cluster (N3) | `_variant_cluster.py` | k-means → ≤3 medoid variants per letter | ✅ works |
 | Render (N4/N5) | `_font_render.py` | place variant glyphs, cycle variants per repeat, draw joins | ✅ works |
 | Backend demo | `_font_pipeline_demo.py` | proves N3/N4 on clean font-traced letters → `font_backend_demo.png` | ✅ works |
 | Font export | `_font_export.py` | variants → SVG glyph paths (`paths.json`) + `specimen.svg` | ✅ works |
+
+## CRAFT letter cutter (the breakthrough on cutting)
+
+Geometry/recognizer cutters all failed on connected cursive. A fine-tuned **CRAFT** character-region
+detector solves it — trained only on **free synthetic cursive** (fonts → perfect per-character
+labels), it transfers to real diary ink and localizes individual letters. Full story + before/after:
+`outputs/.../page_001/craft_results.html`.
+
+- `_craft_model/` — vendored CRAFT model (clovaai, MIT), patched for modern torchvision.
+- `craft_train.py` — reproduces the weights: synthetic cursive + region/affinity GT, diary-style
+  augmentation + CLAHE (closes the synthetic→real gap), OHEM loss (crisp peaks). CPU, ~20-40 min.
+- `craft_segmenter.py` — `CraftSegmenter().cut_word(crop_rgb, text)` → exactly `len(text)-1` cuts
+  (model peaks where confident, width-prior backfill where faint). Extraction is pure numpy/cv2 and
+  unit-tested; torch is lazy-loaded only for inference.
+
+**Status:** fires per-letter on every tested word (v3); clean words cut genuinely per-letter, faint
+words fall back to the width prior. Next: real-domain weak-supervision (label real words from these
+peaks) to sharpen the faint cases.
+
+**Setup (not committed — weights are large):**
+```bash
+pip install torch torchvision            # ~CPU build is fine
+mkdir -p ocr/experiments/craft_weights   # base CRAFT weights (MIT, from EasyOCR's release):
+curl -sSL https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip -o /tmp/c.zip
+unzip -o /tmp/c.zip -d ocr/experiments/craft_weights/
+python -m ocr.experiments.craft_train    # -> craft_weights/craft_finetuned_v3.pth
+```
 
 ## The one blocker
 

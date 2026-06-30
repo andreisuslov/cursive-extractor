@@ -9,6 +9,25 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-30 — CRAFT letter cutter: the breakthrough on cutting (+ consolidated into repo)
+
+Connected-cursive letter cutting — unsolved for the whole project (geometry, recognizer gates,
+pretrained CRAFT all failed) — now WORKS via a fine-tuned **CRAFT** char-region detector, trained
+entirely on this Mac (torch+CPU, no RunPod, no manual labels). Full before/after:
+`outputs/.../page_001/craft_results.html`.
+
+Arc: pretrained CRAFT fails on cursive (OOD) → fine-tune on **free synthetic cursive** (fonts →
+perfect per-char region/affinity GT) → blank on real (synthetic→real domain gap) → **diary-style
+augmentation + CLAHE** closes the gap (v2: 6/6 words fire) → **OHEM loss** sharpens peaks (v3) →
+**L-1 cut extraction** using the known spelling (model peaks + width-prior backfill) → every word
+splits into the right number of letters; clean words cut genuinely per-letter, faint words fall
+back to the prior.
+
+Consolidated into the repo (was all in ephemeral scratchpad): `ocr/experiments/_craft_model/`
+(vendored CRAFT, MIT, patched), `craft_train.py` (reproduces weights), `craft_segmenter.py`
+(`CraftSegmenter.cut_word`; pure-numpy extraction unit-tested, torch lazy-loaded), tests, README
+setup. Weights gitignored (83 MB, reproducible). Next: real-domain weak-supervision.
+
 ## 2026-06-29 — word borders: global layout partition + cell-clamped tightening (`ocr/refine_boxes.py`)
 
 The upstream word-border bottleneck (loose Gemini boxes contaminating crops → bad strokes →
