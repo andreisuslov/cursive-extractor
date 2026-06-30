@@ -52,6 +52,7 @@
     <button id="skip">Skip (s)</button>
     <button id="export">⬇ Export labels</button>
     <span class="sep"></span>
+    text <input id="wtext" style="width:120px;font-weight:600;font-size:15px" title="fix a mis-recognized word (e.g. load → had)" />
     <span id="word">—</span> <span id="status" class="muted"></span>
     <div id="bar"><div id="barfill"></div></div> <span id="progress" class="muted"></span>
   </div>
@@ -109,7 +110,9 @@ function draw(){ ctx.clearRect(0,0,cv.width,cv.height); if(!words.length) return
   $("word").textContent=`"${w.text}"`+(w.skip?" (skipped)":"");
   $("status").innerHTML=have===need?`<span class="ok">${have}/${need} cuts ✓</span>`:`<span class="bad">${have}/${need} cuts</span>`;
   const dn=words.filter(x=>x.done||x.skip).length;
-  $("progress").textContent=`${i+1}/${words.length} · ${dn} done`; $("barfill").style.width=(100*dn/words.length)+"%"; scheduleSave(); }
+  $("progress").textContent=`${i+1}/${words.length} · ${dn} done`; $("barfill").style.width=(100*dn/words.length)+"%";
+  if(document.activeElement!==$("wtext")) $("wtext").value=w.text;   // reflect current word (unless being edited)
+  scheduleSave(); }
 
 function mx(e){return e.offsetX*(cv.width/cv.getBoundingClientRect().width);}
 function my(e){return e.offsetY*(cv.height/cv.getBoundingClientRect().height);}
@@ -121,14 +124,14 @@ function nearestCut(px,py){ const T=view(); let best=null;
 function segDist(px,py,ax,ay,bx,by){ const dx=bx-ax,dy=by-ay,L=dx*dx+dy*dy||1; let t=((px-ax)*dx+(py-ay)*dy)/L; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(ax+t*dx),py-(ay+t*dy)); }
 
 // undo/redo over per-word cuts + erase
-function snap(){ return {i, box:clone(words[i].box), cuts:clone(words[i].cuts), erase:clone(words[i].erase||[])}; }
-function applySnap(s){ i=s.i; words[i].box=clone(s.box); words[i].cuts=clone(s.cuts); words[i].erase=clone(s.erase); words[i].paper=null; draw(); }
+function snap(){ return {i, box:clone(words[i].box), cuts:clone(words[i].cuts), erase:clone(words[i].erase||[]), text:words[i].text}; }
+function applySnap(s){ i=s.i; words[i].box=clone(s.box); words[i].cuts=clone(s.cuts); words[i].erase=clone(s.erase); if(s.text!=null) words[i].text=s.text; words[i].paper=null; draw(); }
 function pushUndo(){ undoStack.push(snap()); if(undoStack.length>200) undoStack.shift(); redoStack=[]; }
 function undo(){ if(!undoStack.length)return; redoStack.push(snap()); applySnap(undoStack.pop()); }
 function redo(){ if(!redoStack.length)return; undoStack.push(snap()); applySnap(redoStack.pop()); }
 // auto-save per-word progress (cuts/erase/box/done) to localStorage so reloads don't lose work
 function scheduleSave(){ if(!sig) return; clearTimeout(saveT); saveT=setTimeout(()=>{ try{
-  localStorage.setItem(sig, JSON.stringify(words.map(w=>({text:w.text,box:w.box,cuts:w.cuts,erase:w.erase||[],done:!!w.done})))); }catch(_e){} }, 500); }
+  localStorage.setItem(sig, JSON.stringify(words.map(w=>({text:w.text,box:w.box,cuts:w.cuts,erase:w.erase||[],done:!!w.done,skip:!!w.skip})))); }catch(_e){} }, 500); }
 
 cv.addEventListener("mousedown",e=>{ if(!words.length) return; const T=view(),X=mx(e),Y=my(e);
   if(tool==="erase"){ pushUndo(); erasing=true; addDab(X,Y); return; }
@@ -180,8 +183,12 @@ function go(d){ i=Math.max(0,Math.min(words.length-1,i+d)); draw(); }
 $("prev").onclick=()=>go(-1); $("next").onclick=()=>go(1);
 $("done").onclick=()=>{ if(words.length){words[i].done=true;words[i].skip=false;go(1);} };
 $("skip").onclick=()=>{ if(words.length){words[i].skip=true;go(1);} };
-$("export").onclick=()=>{ const out={page:pageURL, words: words.map(w=>({text:w.text,box:w.box,cuts:w.cuts.slice().sort((a,b)=>cutX(a)-cutX(b)),erase:w.erase||[],done:!!w.done,skip:!!w.skip}))};
+$("export").onclick=()=>{ if(!pageURL){ alert("Load a page (label_review.json / resume.json) before exporting."); return; }
+  const out={page:pageURL, words: words.map(w=>({text:w.text,box:w.box,cuts:w.cuts.slice().sort((a,b)=>cutX(a)-cutX(b)),erase:w.erase||[],done:!!w.done,skip:!!w.skip}))};
   const b=new Blob([JSON.stringify(out)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="labels_corrected.json"; a.click(); };
+// edit the recognized word (e.g. "load" -> "had"); labels + cut-count update live
+$("wtext").addEventListener("focus",()=>{ if(words.length) pushUndo(); });
+$("wtext").addEventListener("input",()=>{ if(words.length){ words[i].text=$("wtext").value; draw(); } });
 // merge a saved-edits array ([{text,box,cuts,erase,done}]) onto the loaded words, matched by text in order
 function applyEdits(saved){ let j=0,n=0;
   for(let k=0;k<words.length && j<saved.length;k++){ if(words[k].text===saved[j].text){ const s=saved[j++];
@@ -190,8 +197,10 @@ function applyEdits(saved){ let j=0,n=0;
 function loadDoc(data){                                  // {page, words}: fresh review OR self-contained export
   pageURL=data.page; words=data.words; undoStack=[]; redoStack=[]; i=0;
   words.forEach((w,k)=>{ if(typeof (w.cuts[0])==="number") w.cuts=w.cuts.map(x=>[[x,0],[x,w.box[3]-w.box[1]]]); base[k]=clone(w.cuts); w.erase=w.erase||[]; });
-  sig="ll:"+words.length+":"+(words[0]?.text||"")+":"+(words[words.length-1]?.text||"");
-  try{ const sv=localStorage.getItem(sig); if(sv && confirm("This browser has newer auto-saved progress for this page. Restore it?")) applyEdits(JSON.parse(sv)); }catch(_e){}
+  sig="ll:"+words.length+":"+(pageURL?pageURL.length:0);   // keyed on the page image (stable across text/box edits)
+  try{ const sv=localStorage.getItem(sig); if(sv){ const arr=JSON.parse(sv);
+    if(arr.length===words.length && confirm("This browser has auto-saved progress for this page. Restore it?"))
+      arr.forEach((s,k)=>{ if(s.text!=null)words[k].text=s.text; if(s.cuts)words[k].cuts=clone(s.cuts); words[k].erase=clone(s.erase||[]); words[k].done=!!s.done; words[k].skip=!!s.skip; if(s.box)words[k].box=clone(s.box); }); } }catch(_e){}
   page=new Image(); page.onload=()=>{i=0;draw();}; page.src=pageURL; }
 // one loader for everything: a full {page,words} doc, or a legacy page-less edits array
 $("file").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
@@ -201,6 +210,7 @@ $("file").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return
     else loadDoc(data); };
   r.readAsText(f); });
 window.addEventListener("keydown",e=>{ if(!words.length) return;
+  if(document.activeElement===$("wtext")){ if(e.key==="Enter") $("wtext").blur(); return; }  // typing the word: no shortcuts
   if((e.metaKey||e.ctrlKey) && (e.key==="z"||e.key==="Z")){ e.preventDefault(); e.shiftKey?redo():undo(); return; }
   if(e.metaKey||e.ctrlKey){ if(e.key===" "){ e.preventDefault(); $("next").click(); } return; }
   if(e.key===" ") { e.preventDefault(); return; }                 // bare space does nothing

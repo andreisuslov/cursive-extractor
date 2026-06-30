@@ -9,6 +9,18 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-30 — labeller: zoom, editable word text, robust load-from-anywhere
+
+- **⌘/ctrl+scroll & trackpad pinch zoom** the frame toward the cursor (cursor-anchored box resize),
+  undoable.
+- **Editable word text**: a `text` field fixes mis-recognised words (e.g. "load"→"had"); labels +
+  cut-count update live; undoable; keyboard shortcuts pause while the field is focused so you can
+  type. Flows through export → `label_ingest` (uses the word's text).
+- **Load from anywhere**: exports already embed the page (data-URL), so a downloaded
+  `labels_corrected.json` loads with its image from the Downloads folder — added an export guard so
+  a page-less file can't be produced. localStorage auto-save is now keyed on the page image (stable
+  across text/box edits) and restores by index (so edited text survives).
+
 ## 2026-06-30 — labeller: pan-image + one self-contained loader (don't-lose-work fix)
 
 Two fixes after user feedback. (1) **Pan/move the underlying image** (a "Pan img" tool) + grow/shrink
