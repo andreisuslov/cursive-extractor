@@ -84,9 +84,21 @@ def main(argv=None):
     here = os.path.dirname(__file__)
     p = argparse.ArgumentParser(description="CRAFT real-domain weak-supervision")
     p.add_argument(
-        "--page-dir", required=True, help="page dir with boxes_refined.json + *_page.png"
+        "--page-dirs",
+        required=True,
+        nargs="+",
+        help="page dirs with boxes_refined.json + *_page.png",
     )
-    p.add_argument("--base", default=os.path.join(here, "craft_weights", "craft_finetuned_v3.pth"))
+    p.add_argument(
+        "--base",
+        default=os.path.join(here, "craft_weights", "craft_finetuned_v3.pth"),
+        help="checkpoint to fine-tune FROM",
+    )
+    p.add_argument(
+        "--collect-from",
+        default=None,
+        help="checkpoint used to pseudo-label real words (default: --base)",
+    )
     p.add_argument("--out", default=os.path.join(here, "craft_weights", "craft_finetuned_v4.pth"))
     p.add_argument("--steps", type=int, default=800)
     p.add_argument("--batch", type=int, default=4)
@@ -95,13 +107,24 @@ def main(argv=None):
     random.seed(0)
     torch.manual_seed(0)
     np.random.seed(0)
-    net = CRAFT()
-    sd = torch.load(args.base, map_location="cpu", weights_only=True)
-    net.load_state_dict(OrderedDict((k.replace("module.", ""), v) for k, v in sd.items()))
-    net = net.to("cpu").eval()
 
-    real = collect_pseudo_labels(net, torch, args.page_dir)
-    print(f"collected {len(real)} confident real pseudo-labels", flush=True)
+    def load(path):
+        net = CRAFT()
+        sd = torch.load(path, map_location="cpu", weights_only=True)
+        net.load_state_dict(OrderedDict((k.replace("module.", ""), v) for k, v in sd.items()))
+        return net.to("cpu")
+
+    cnet = load(args.collect_from or args.base).eval()
+    real = []
+    for pdir in args.page_dirs:
+        got = collect_pseudo_labels(cnet, torch, pdir)
+        real += got
+        print(f"  {os.path.basename(pdir)}: +{len(got)} pseudo-labels", flush=True)
+    print(
+        f"collected {len(real)} confident real pseudo-labels from {len(args.page_dirs)} pages",
+        flush=True,
+    )
+    net = load(args.base)
     words, fonts = _vocab(), font_bank()
 
     def ohem(pred, gt, ratio=3):

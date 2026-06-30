@@ -9,6 +9,22 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-30 — CRAFT v5: scaling weak-supervision 15x did NOT help (honest negative)
+
+Pushed weak-supervision from 1 page (25 labels, v4) to **6 same-writer pages (386 pseudo-labels,
+v5)** — `craft_weaksup.py` extended to multi-page (`--page-dirs`) + a separate `--collect-from`
+detector. Result: **v5 is not better than v4 — slightly worse.** Visually the peaks are *more
+merged* on Uncle/Hill/girls; Isabel/John hold; the faint "became" is no better. Counts: girls 4→2,
+Uncle 4→3 (regressed), Isabel 6/6 held.
+
+Why: the labels are **self-training on v4's own predictions**, and the L±2 confidence gate admits
+more noisy/mislabeled words at 386 than at the hand-tight 25, so training averaged toward broader
+peaks instead of sharpening. Same lesson as M12 (4x data didn't clean it): the limiter is
+pseudo-label *noise*, not quantity. **v4 stays the default.** The real levers from here would be
+human-verified labels (not self-labels), a stricter/cross-checked gate, higher input resolution, or
+affinity-aware peak→box extraction — not simply more self-supervised data. Kept the multi-page code
+(useful), did not promote v5.
+
 ## 2026-06-30 — CRAFT v4: real-domain weak-supervision sharpens the peaks
 
 Synthetic-only v3 transferred to real ink but peaks were broad/merged (over-segmented). Weak-sup
