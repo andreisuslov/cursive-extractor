@@ -1,10 +1,6 @@
-"""Tests for verified-label ingest: ordered polyline polygons, eraser, inpainted-crop path."""
-
-import base64
-import io
+"""Tests for verified-label ingest: ordered polyline polygons + paper-colour eraser."""
 
 import numpy as np
-from PIL import Image
 
 from ocr.experiments.label_ingest import ingest, letter_polys
 
@@ -17,7 +13,6 @@ def test_letter_polys_splits_and_labels_local():
 
 
 def test_letter_polys_orders_cuts_left_to_right():
-    # cuts given out of x-order -> must still label slices left-to-right
     out = letter_polys([[[60, 0], [60, 50]], [[30, 0], [30, 50]]], 100, 50, "abc")
     assert [c for c, _ in out] == ["a", "b", "c"]
     assert max(p[0] for p in out[0][1]) == 30  # 'a' ends at the leftmost cut, not 60
@@ -34,32 +29,17 @@ def test_letter_polys_respects_slanted_cut():
     assert 40 in ax and 60 in ax
 
 
-def test_ingest_masks_polygon_and_applies_eraser():
-    page = np.full((40, 140, 3), 100, np.uint8)
+def test_ingest_eraser_fills_with_paper_colour():
+    page = np.full((40, 140, 3), 200, np.uint8)
+    page[12:18, 30:42] = 30  # a dark ink blob inside the word (crop-local x≈20..32)
     corrected = [
         {
             "text": "ab",
             "box": [10, 5, 110, 25],
-            "cuts": [[[50, 0], [50, 20]]],
-            "erase": [[20, 10, 6]],
+            "cuts": [[[60, 0], [60, 20]]],
+            "erase": [[26, 9, 8]],
         }
     ]
-    letters = ingest(corrected, page)
-    assert [c for c, _ in letters] == ["a", "b"]
-    a_crop = letters[0][1]
-    assert (a_crop == 255).any()  # eraser dab whited out part of 'a'
-    assert (a_crop == 100).any()  # paper elsewhere kept
-
-
-def test_ingest_uses_inpainted_clean_crop_when_present():
-    clean = np.full((20, 100, 3), 200, np.uint8)
-    clean[:, :50] = 50  # left half (the 'a') is dark in the cleaned crop
-    buf = io.BytesIO()
-    Image.fromarray(clean).save(buf, "PNG")
-    durl = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-    corrected = [
-        {"text": "ab", "box": [0, 0, 100, 20], "cuts": [[[50, 0], [50, 20]]], "clean": durl}
-    ]
-    # page is all black; if the clean crop is used, 'a' carries its 50s, not the page's 0s
-    letters = ingest(corrected, np.zeros((20, 100, 3), np.uint8))
-    assert (letters[0][1] == 50).any()
+    a_crop = ingest(corrected, page)[0][1]  # 'a' spans crop-local x 0..60, contains the blob
+    assert not (a_crop == 30).any()  # ink erased
+    assert (a_crop == 200).any()  # filled with the paper colour (not flat white)

@@ -35,22 +35,10 @@ def letter_polys(cuts, bw, bh, text):
     return out
 
 
-def _decode_clean(data_url):
-    """Decode an inpainted-crop data-URL (PNG) -> RGB ndarray."""
-    import base64
-    import io
-
-    import numpy as np
-    from PIL import Image
-
-    raw = base64.b64decode(data_url.split(",", 1)[1])
-    return np.array(Image.open(io.BytesIO(raw)).convert("RGB"))
-
-
 def ingest(corrected, page_rgb):
-    """List of ``(char, letter_crop_ndarray)`` — each letter masked to its polygon. Uses the
-    word's inpainted ``clean`` crop if present (ink already removed), else the page crop with the
-    eraser dabs whited out."""
+    """List of ``(char, letter_crop_ndarray)`` — each letter masked to its polygon. Pixels outside
+    the polygon, and the eraser dabs, are filled with the word's PAPER COLOUR (median of the crop),
+    so the glyph sits on a clean, matching background instead of a flat white."""
     import cv2
     import numpy as np
 
@@ -58,10 +46,8 @@ def ingest(corrected, page_rgb):
     for w in corrected:
         x0, y0, x1, y1 = w["box"]
         bw, bh = x1 - x0, y1 - y0
-        if w.get("clean"):
-            src, erase = _decode_clean(w["clean"]), []  # ink already baked out
-        else:
-            src, erase = page_rgb[y0:y1, x0:x1].copy(), w.get("erase", [])
+        src = page_rgb[y0:y1, x0:x1]
+        paper = np.median(src.reshape(-1, src.shape[-1]), axis=0)  # ink is a minority -> paper
         for ch, poly in letter_polys(w["cuts"], bw, bh, w["text"]):
             pts = np.array(poly, np.int32)
             bx0, by0 = max(0, pts[:, 0].min()), max(0, pts[:, 1].min())
@@ -71,9 +57,9 @@ def ingest(corrected, page_rgb):
             sub = src[by0:by1, bx0:bx1].copy()
             mask = np.zeros(sub.shape[:2], np.uint8)
             cv2.fillPoly(mask, [pts - [bx0, by0]], 255)
-            for ex, ey, er in erase:  # eraser dabs are crop-local
+            for ex, ey, er in w.get("erase", []):  # eraser dabs are crop-local
                 cv2.circle(mask, (int(ex - bx0), int(ey - by0)), int(er), 0, -1)
-            sub[mask == 0] = 255  # whiten outside the polygon (+ erased ink)
+            sub[mask == 0] = paper  # fill outside-polygon + erased ink with paper colour
             letters.append((ch, sub))
     return letters
 

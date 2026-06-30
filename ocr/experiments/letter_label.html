@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Letter labeller — polyline cuts + inpaint</title>
+<title>Letter labeller</title>
 <style>
   body { font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; color: #1a1a1a; }
   #wrap { max-width: 1100px; }
@@ -16,29 +16,28 @@
   #bar { height: 6px; background:#eee; border-radius:3px; overflow:hidden; flex:1; min-width:120px; }
   #barfill { height:100%; background:#2e7d32; width:0%; }
   .sep { width:1px; height:24px; background:#ddd; margin:0 4px; }
-  #inpaintNote { color:#b06000; font-weight:600; }
 </style>
 </head>
 <body>
 <div id="wrap">
   <h2>Letter labeller</h2>
-  <p class="muted">Load <code>label_review.json</code>. Cuts are <b>polylines</b> — drag the square
-    handles (top/bottom independently for slant, middle for curve). Labels auto-fill from the spelling.
-    <b>Move</b>: drag handle · drag a cut's line (not a handle) to slide the whole cut · dbl-click (or <kbd>⌥</kbd>-click) a cut to add a point · <kbd>shift</kbd>+click a handle to delete.
-    <b>+Cut</b>: click to drop a new cut. <b>Inpaint</b>: paint a mask over non-letter ink, then <b>Run inpaint</b> to reconstruct the paper.
-    <kbd>⌘space</kbd> next · <kbd>⏎</kbd> done+next · <kbd>s</kbd> skip · <kbd>←/→</kbd> move · <kbd>⌘Z</kbd> undo · <kbd>⌘⇧Z</kbd> redo.</p>
+  <p class="muted">Load <code>label_review.json</code>. Cuts are <b>polylines</b> — drag a handle
+    (top/bottom = slant), drag the line body to slide the whole cut, dbl-click / <kbd>⌥</kbd>-click a
+    cut to add a midpoint (curve), <kbd>shift</kbd>+click a handle to delete. Labels auto-fill from
+    the spelling (cuts auto-order left→right). <b>+Cut</b>: click to drop a new cut.
+    <b>Eraser</b>: paint over non-letter ink — it's filled with the paper colour.
+    <kbd>⌘space</kbd> next · <kbd>⏎</kbd> done+next · <kbd>s</kbd> skip · <kbd>←/→</kbd> move ·
+    <kbd>⌘Z</kbd> undo · <kbd>⌘⇧Z</kbd> redo.</p>
 
   <div class="row">
     <input type="file" id="file" accept="application/json" />
     <span class="sep"></span>
     <button id="tMove" class="on">Move</button>
     <button id="tCut">+ Cut</button>
-    <button id="tErase">Inpaint mask</button>
+    <button id="tErase">Eraser</button>
     brush <input type="range" id="brush" min="4" max="40" value="12" style="width:80px">
-    <button id="runInpaint">Run inpaint</button>
-    <button id="clearErase">clear mask</button>
+    <button id="clearErase">clear erase</button>
     <button id="auto">reset cuts</button>
-    <span id="inpaintNote"></span>
   </div>
   <div class="row">
     <button id="prev">◀ Prev</button>
@@ -54,338 +53,115 @@
 </div>
 
 <script>
-const PAD = 16, LBLH = 40;
-let data=null, words=[], i=0, page=new Image(), base={};
-let tool="move", drag=null, erasing=false;
-const HANDLE_HIT=10, SEG_HIT=8;
-const clone=o=>JSON.parse(JSON.stringify(o));
+const PAD=16, LBLH=40, HANDLE_HIT=10, SEG_HIT=8;
+let words=[], i=0, page=new Image(), base={}, tool="move", drag=null, erasing=false;
 let undoStack=[], redoStack=[];
+const clone=o=>JSON.parse(JSON.stringify(o));
 const cv=document.getElementById("cv"), ctx=cv.getContext("2d"), $=id=>document.getElementById(id);
 const COLORS=["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
 
 function view(){ const w=words[i],[x0,y0,x1,y1]=w.box,bw=x1-x0,bh=y1-y0;
   const aW=cv.width-2*PAD, aH=cv.height-2*PAD-LBLH, s=Math.min(aW/bw,aH/bh);
   const dw=bw*s,dh=bh*s,dx=(cv.width-dw)/2,dy=PAD;
-  return {bw,bh,dx,dy,dw,dh,box:w.box,
-    toX:cx=>dx+cx/bw*dw, toY:cy=>dy+cy/bh*dh,
-    fromX:px=>(px-dx)/dw*bw, fromY:py=>(py-dy)/dh*bh}; }
+  return {bw,bh,dx,dy,dw,dh, toX:cx=>dx+cx/bw*dw, toY:cy=>dy+cy/bh*dh, fromX:px=>(px-dx)/dw*bw, fromY:py=>(py-dy)/dh*bh}; }
 
-// representative x of a cut (mean of its points) — used to order cuts left-to-right
-function cutX(c){ return c.reduce((s,p)=>s+p[0],0)/c.length; }
-// boundaries: left edge, the cut polylines (ordered L->R by x, each sorted top->bottom), right edge
+const cutX=c=>c.reduce((s,p)=>s+p[0],0)/c.length;                 // representative x (mean)
 function boundaries(w){ const bh=w.box[3]-w.box[1], bw=w.box[2]-w.box[0];
-  const srt=c=>c.slice().sort((a,b)=>a[1]-b[1]);
-  const cuts=w.cuts.slice().sort((a,b)=>cutX(a)-cutX(b)).map(srt);
+  const cuts=w.cuts.slice().sort((a,b)=>cutX(a)-cutX(b)).map(c=>c.slice().sort((a,b)=>a[1]-b[1]));
   return [[[0,0],[0,bh]], ...cuts, [[bw,0],[bw,bh]]]; }
+
+// paper colour: median of the word crop (ink is a minority of pixels) -- cached per word
+function paperColor(w){ if(w.paper) return w.paper;
+  const [x0,y0,x1,y1]=w.box, bw=x1-x0, bh=y1-y0, s=Math.min(1,80/Math.max(bw,bh));
+  const c=document.createElement("canvas"); c.width=Math.max(1,bw*s|0); c.height=Math.max(1,bh*s|0);
+  const cx=c.getContext("2d"); cx.drawImage(page,x0,y0,bw,bh,0,0,c.width,c.height);
+  const d=cx.getImageData(0,0,c.width,c.height).data, R=[],G=[],B=[];
+  for(let p=0;p<d.length;p+=4){R.push(d[p]);G.push(d[p+1]);B.push(d[p+2]);}
+  const med=a=>{a.sort((x,y)=>x-y);return a[a.length>>1];};
+  return (w.paper=[med(R),med(G),med(B)]); }
 
 function draw(){ ctx.clearRect(0,0,cv.width,cv.height); if(!words.length) return;
   const w=words[i], T=view();
-  if(w.cleanCanvas) ctx.drawImage(w.cleanCanvas, 0,0,w.cleanCanvas.width,w.cleanCanvas.height, T.dx,T.dy,T.dw,T.dh);
-  else ctx.drawImage(page, w.box[0],w.box[1],T.bw,T.bh, T.dx,T.dy,T.dw,T.dh);
+  ctx.drawImage(page, w.box[0],w.box[1],T.bw,T.bh, T.dx,T.dy,T.dw,T.dh);
+  ctx.fillStyle="rgb("+paperColor(w).join(",")+")";              // eraser: paper-colour dabs over ink
+  for(const d of (w.erase||[])){ ctx.beginPath(); ctx.arc(T.toX(d[0]),T.toY(d[1]),d[2]*T.dw/T.bw,0,7); ctx.fill(); }
   ctx.strokeStyle="#ddd"; ctx.strokeRect(T.dx,T.dy,T.dw,T.dh);
   const bnds=boundaries(w);
-  for(let k=0;k<bnds.length-1;k++){                       // colour each slice as a polygon
+  for(let k=0;k<bnds.length-1;k++){                              // colour each slice + auto-label
     const a=bnds[k], b=bnds[k+1]; ctx.beginPath();
     a.forEach((p,j)=>{const X=T.toX(p[0]),Y=T.toY(p[1]); j?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});
     for(let j=b.length-1;j>=0;j--) ctx.lineTo(T.toX(b[j][0]),T.toY(b[j][1]));
     ctx.closePath(); ctx.fillStyle=COLORS[k%10]+"22"; ctx.fill();
     const ch=w.text[k];
     if(ch!==undefined){ const mid=(a[a.length>>1][0]+b[b.length>>1][0])/2;
-      ctx.fillStyle=COLORS[k%10]; ctx.font="22px sans-serif"; ctx.textAlign="center";
-      ctx.fillText(ch, T.toX(mid), T.dy+T.dh+28); } }
-  ctx.strokeStyle="#d00"; ctx.lineWidth=2;                // cut polylines + handles
+      ctx.fillStyle=COLORS[k%10]; ctx.font="22px sans-serif"; ctx.textAlign="center"; ctx.fillText(ch, T.toX(mid), T.dy+T.dh+28); } }
+  ctx.strokeStyle="#d00"; ctx.lineWidth=2;
   for(const c of w.cuts){ const s=c.slice().sort((a,b)=>a[1]-b[1]);
     ctx.beginPath(); s.forEach((p,j)=>{const X=T.toX(p[0]),Y=T.toY(p[1]); j?ctx.lineTo(X,Y):ctx.moveTo(X,Y);}); ctx.stroke();
-    ctx.fillStyle="#d00"; for(const p of s){ ctx.fillRect(T.toX(p[0])-4,T.toY(p[1])-4,8,8); } }
-  ctx.fillStyle="rgba(255,80,80,0.40)";                   // inpaint mask preview (highlight)
-  for(const d of (w.erase||[])){ ctx.beginPath(); ctx.arc(T.toX(d[0]),T.toY(d[1]),d[2]*T.dw/T.bw,0,7); ctx.fill(); }
+    ctx.fillStyle="#d00"; for(const p of s) ctx.fillRect(T.toX(p[0])-4,T.toY(p[1])-4,8,8); }
   const need=w.text.length-1, have=w.cuts.length;
-  $("word").textContent=`"${w.text}"`+(w.skip?" (skipped)":"")+(w.clean?" (inpainted)":"");
+  $("word").textContent=`"${w.text}"`+(w.skip?" (skipped)":"");
   $("status").innerHTML=have===need?`<span class="ok">${have}/${need} cuts ✓</span>`:`<span class="bad">${have}/${need} cuts</span>`;
   const dn=words.filter(x=>x.done||x.skip).length;
   $("progress").textContent=`${i+1}/${words.length} · ${dn} done`; $("barfill").style.width=(100*dn/words.length)+"%"; }
 
 function mx(e){return e.offsetX*(cv.width/cv.getBoundingClientRect().width);}
 function my(e){return e.offsetY*(cv.height/cv.getBoundingClientRect().height);}
-// nearest control point: {ci,pi,dist} in canvas px
 function nearestPoint(px,py){ const T=view(); let best=null;
-  words[i].cuts.forEach((c,ci)=>c.forEach((p,pi)=>{const d=Math.hypot(T.toX(p[0])-px,T.toY(p[1])-py); if(!best||d<best.d) best={ci,pi,d};}));
-  return best; }
-// nearest cut polyline (segment distance), for adding a point / whole-cut slide
+  words[i].cuts.forEach((c,ci)=>c.forEach((p,pi)=>{const d=Math.hypot(T.toX(p[0])-px,T.toY(p[1])-py); if(!best||d<best.d) best={ci,pi,d};})); return best; }
 function nearestCut(px,py){ const T=view(); let best=null;
   words[i].cuts.forEach((c,ci)=>{const s=c.slice().sort((a,b)=>a[1]-b[1]);
-    for(let j=0;j<s.length-1;j++){ const d=segDist(px,py,T.toX(s[j][0]),T.toY(s[j][1]),T.toX(s[j+1][0]),T.toY(s[j+1][1])); if(!best||d<best.d) best={ci,d}; }});
-  return best; }
-function segDist(px,py,ax,ay,bx,by){ const dx=bx-ax,dy=by-ay,L=dx*dx+dy*dy||1;
-  let t=((px-ax)*dx+(py-ay)*dy)/L; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(ax+t*dx),py-(ay+t*dy)); }
+    for(let j=0;j<s.length-1;j++){ const d=segDist(px,py,T.toX(s[j][0]),T.toY(s[j][1]),T.toX(s[j+1][0]),T.toY(s[j+1][1])); if(!best||d<best.d) best={ci,d}; }}); return best; }
+function segDist(px,py,ax,ay,bx,by){ const dx=bx-ax,dy=by-ay,L=dx*dx+dy*dy||1; let t=((px-ax)*dx+(py-ay)*dy)/L; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(ax+t*dx),py-(ay+t*dy)); }
 
-// ---- undo / redo (per-word cuts + mask state) ----
+// undo/redo over per-word cuts + erase
 function snap(){ return {i, cuts:clone(words[i].cuts), erase:clone(words[i].erase||[])}; }
 function applySnap(s){ i=s.i; words[i].cuts=clone(s.cuts); words[i].erase=clone(s.erase); draw(); }
-function pushUndo(){ undoStack.push(snap()); if(undoStack.length>200) undoStack.shift(); redoStack=[]; } // call BEFORE a mutation
+function pushUndo(){ undoStack.push(snap()); if(undoStack.length>200) undoStack.shift(); redoStack=[]; }
 function undo(){ if(!undoStack.length)return; redoStack.push(snap()); applySnap(undoStack.pop()); }
 function redo(){ if(!redoStack.length)return; undoStack.push(snap()); applySnap(redoStack.pop()); }
 
-cv.addEventListener("mousedown",e=>{ if(!words.length) return; const T=view(), X=mx(e), Y=my(e);
+cv.addEventListener("mousedown",e=>{ if(!words.length) return; const T=view(),X=mx(e),Y=my(e);
   if(tool==="erase"){ pushUndo(); erasing=true; addDab(X,Y); return; }
   if(tool==="cut"){ pushUndo(); words[i].cuts.push([[T.fromX(X),0],[T.fromX(X),T.bh]]); draw(); return; }
-  const np=nearestPoint(X,Y);                                   // move tool
-  if(np && np.d<HANDLE_HIT){
-    if(e.shiftKey){ pushUndo(); const c=words[i].cuts[np.ci]; c.splice(np.pi,1); if(c.length<2) words[i].cuts.splice(np.ci,1); draw(); }
-    else drag={ci:np.ci,pi:np.pi,whole:false,snapped:false};
-    return;
-  }
-  if(e.altKey){                                                 // ⌥-click on a segment -> add a point
-    const na=nearestCut(X,Y);
-    if(na && na.d<SEG_HIT){ pushUndo(); words[i].cuts[na.ci].push([T.fromX(X),T.fromY(Y)]); words[i].cuts[na.ci].sort((a,b)=>a[1]-b[1]); draw(); }
-    return;
-  }
-  const nc=nearestCut(X,Y);                                     // on a line segment, not a handle -> whole-cut slide
-  if(nc && nc.d<SEG_HIT && !e.shiftKey){
-    drag={ci:nc.ci,whole:true,snapped:false,x0:T.fromX(X),orig:words[i].cuts[nc.ci].map(p=>p.slice())};
-  }
-});
-cv.addEventListener("mousemove",e=>{ const T=view(),X=mx(e),Y=my(e);
+  if(e.altKey){ const nc=nearestCut(X,Y); if(nc&&nc.d<SEG_HIT){ pushUndo(); words[i].cuts[nc.ci].push([T.fromX(X),T.fromY(Y)]); words[i].cuts[nc.ci].sort((a,b)=>a[1]-b[1]); draw(); } return; }
+  const np=nearestPoint(X,Y);
+  if(np && np.d<HANDLE_HIT){ if(e.shiftKey){ pushUndo(); const c=words[i].cuts[np.ci]; c.splice(np.pi,1); if(c.length<2) words[i].cuts.splice(np.ci,1); draw(); } else drag={ci:np.ci,pi:np.pi}; return; }
+  const nc=nearestCut(X,Y); if(nc && nc.d<SEG_HIT) drag={whole:true, ci:nc.ci, startX:T.fromX(X), orig:clone(words[i].cuts[nc.ci])}; });
+cv.addEventListener("mousemove",e=>{ if(!words.length) return; const T=view(),X=mx(e),Y=my(e);
   if(erasing){ addDab(X,Y); return; }
-  if(drag){
-    if(!drag.snapped){ pushUndo(); drag.snapped=true; }
-    if(drag.whole){
-      const xs=drag.orig.map(p=>p[0]), mn=Math.min(...xs), mxx=Math.max(...xs);
-      let dxb=T.fromX(X)-drag.x0; dxb=Math.max(-mn,Math.min(T.bw-mxx,dxb)); // clamp as a group so shape stays in [0,bw]
-      words[i].cuts[drag.ci]=drag.orig.map(p=>[p[0]+dxb,p[1]]); draw();
-    } else {
-      const p=words[i].cuts[drag.ci][drag.pi];
-      p[0]=Math.max(0,Math.min(T.bw,T.fromX(X))); p[1]=Math.max(0,Math.min(T.bh,T.fromY(Y))); draw();
-    }
-  }
-});
-window.addEventListener("mouseup",()=>{ if(drag){ words[i].cuts[drag.ci].sort((a,b)=>a[1]-b[1]); drag=null; } erasing=false; });
+  if(!drag) return;
+  if(!drag.snapped){ pushUndo(); drag.snapped=true; }              // one undo entry per drag gesture
+  if(drag.whole){ const dx=T.fromX(X)-drag.startX; words[i].cuts[drag.ci]=drag.orig.map(p=>[Math.max(0,Math.min(T.bw,p[0]+dx)),p[1]]); }
+  else { const p=words[i].cuts[drag.ci][drag.pi]; p[0]=Math.max(0,Math.min(T.bw,T.fromX(X))); p[1]=Math.max(0,Math.min(T.bh,T.fromY(Y))); }
+  draw(); });
+window.addEventListener("mouseup",()=>{ if(drag&&!drag.whole&&drag.snapped) words[i].cuts[drag.ci].sort((a,b)=>a[1]-b[1]); drag=null; erasing=false; });
 cv.addEventListener("dblclick",e=>{ if(!words.length||tool!=="move") return; const T=view(),X=mx(e),Y=my(e);
   const nc=nearestCut(X,Y); if(nc&&nc.d<12){ pushUndo(); words[i].cuts[nc.ci].push([T.fromX(X),T.fromY(Y)]); words[i].cuts[nc.ci].sort((a,b)=>a[1]-b[1]); draw(); } });
-function addDab(X,Y){ const T=view(); const r=+$("brush").value;
-  words[i].erase=words[i].erase||[]; words[i].erase.push([T.fromX(X),T.fromY(Y),r*T.bw/T.dw]); draw(); }
+function addDab(X,Y){ const T=view(),r=+$("brush").value; (words[i].erase=words[i].erase||[]).push([T.fromX(X),T.fromY(Y),r*T.bw/T.dw]); draw(); }
 
-function setTool(t){ tool=t; for(const[id,n] of [["tMove","move"],["tCut","cut"],["tErase","erase"]]) $(id).classList.toggle("on",n===t);
-  cv.style.cursor=t==="erase"?"cell":t==="cut"?"copy":"crosshair"; }
+function setTool(t){ tool=t; for(const[id,n] of [["tMove","move"],["tCut","cut"],["tErase","erase"]]) $(id).classList.toggle("on",n===t); }
 $("tMove").onclick=()=>setTool("move"); $("tCut").onclick=()=>setTool("cut"); $("tErase").onclick=()=>setTool("erase");
-$("clearErase").onclick=()=>{ if(words.length){ pushUndo(); words[i].erase=[]; draw(); } };
+$("clearErase").onclick=()=>{ if(words.length){pushUndo();words[i].erase=[];draw();} };
+$("auto").onclick=()=>{ if(words.length){pushUndo();words[i].cuts=clone(base[i]||[]);words[i].erase=[];draw();} };
 function go(d){ i=Math.max(0,Math.min(words.length-1,i+d)); draw(); }
 $("prev").onclick=()=>go(-1); $("next").onclick=()=>go(1);
 $("done").onclick=()=>{ if(words.length){words[i].done=true;words[i].skip=false;go(1);} };
 $("skip").onclick=()=>{ if(words.length){words[i].skip=true;go(1);} };
-$("auto").onclick=()=>{ if(words.length){ pushUndo(); words[i].cuts=clone(base[i]||[]); words[i].erase=[]; draw(); } };
-$("export").onclick=()=>{ const out=words.filter(w=>!w.skip).map(w=>{
-    const o={text:w.text,box:w.box,cuts:w.cuts.slice().sort((a,b)=>cutX(a)-cutX(b)),erase:w.erase||[],done:!!w.done};
-    if(w.clean) o.clean=w.clean;                          // cleaned crop data-URL, only for inpainted words
-    return o; });
+$("export").onclick=()=>{ const out=words.filter(w=>!w.skip).map(w=>({text:w.text,box:w.box,cuts:w.cuts.slice().sort((a,b)=>cutX(a)-cutX(b)),erase:w.erase||[],done:!!w.done}));
   const b=new Blob([JSON.stringify(out)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="labels_corrected.json"; a.click(); };
 $("file").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
-  r.onload=()=>{ data=JSON.parse(r.result); words=data.words; undoStack=[]; redoStack=[];
-    words.forEach((w,k)=>{ if(typeof (w.cuts[0])==="number") w.cuts=w.cuts.map(x=>[[x,0],[x,w.box[3]-w.box[1]]]); base[k]=clone(w.cuts); w.erase=w.erase||[];
-      if(w.clean){ const im=new Image(); im.onload=()=>{ const c=document.createElement("canvas"); c.width=w.box[2]-w.box[0]; c.height=w.box[3]-w.box[1]; c.getContext("2d").drawImage(im,0,0,c.width,c.height); w.cleanCanvas=c; if(k===i)draw(); }; im.src=w.clean; } });
+  r.onload=()=>{ const data=JSON.parse(r.result); words=data.words; undoStack=[]; redoStack=[];
+    words.forEach((w,k)=>{ if(typeof (w.cuts[0])==="number") w.cuts=w.cuts.map(x=>[[x,0],[x,w.box[3]-w.box[1]]]); base[k]=clone(w.cuts); w.erase=w.erase||[]; });
     page=new Image(); page.onload=()=>{i=0;draw();}; page.src=data.page; };
   r.readAsText(f); });
-window.addEventListener("keydown",e=>{ if(!words.length)return;
-  if(e.metaKey && (e.key==="z"||e.key==="Z")){ e.preventDefault(); e.shiftKey?redo():undo(); return; }
-  if(e.metaKey && e.key===" "){ e.preventDefault(); $("next").click(); return; }
-  if(e.key===" "){ e.preventDefault(); return; }   // bare space does nothing (also swallows space-activates-focused-button)
-  if(e.key==="Enter"){e.preventDefault();$("done").click();}
-  else if(e.key==="s")$("skip").click(); else if(e.key==="ArrowRight")$("next").click(); else if(e.key==="ArrowLeft")$("prev").click();
-  else if(e.key==="m")setTool("move"); else if(e.key==="c")setTool("cut"); else if(e.key==="e")setTool("erase"); });
-
-// ============================================================================
-//  Moebius in-browser inpainting (onnxruntime-web + WebGPU, lazy-loaded)
-//  3-graph latent-diffusion pipeline (VAE enc / UNet / VAE dec) + 19-step DDIM.
-//  Degrades to a plain white-fill if WebGPU / the model is unavailable.
-// ============================================================================
-const ORT_URL   = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.mjs";
-const ORT_WASM  = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
-const MODEL_BASE= "https://huggingface.co/simonw/Moebius-ONNX/resolve/main";
-const CACHE_NAME= "moebius-onnx-v1";
-const IMG=512, LAT=64, SCALING_FACTOR=0.13025, NOISE_OFFSET=0.0357;
-const INP_STEPS=20, INP_GUIDANCE=2, INP_SEED=0;
-let ort=null, sess={enc:null,dec:null,unet:null};
-let inpaintReady=false, inpaintAvailable=null, inpaintLoading=null, inpainting=false;
-function setInpaintNote(t){ const el=$("inpaintNote"); if(el) el.textContent=t||""; }
-
-// --- lazy load runtime + the three ONNX graphs (once) ---
-async function ensureInpaint(){
-  if(inpaintReady) return true;
-  if(inpaintAvailable===false) return false;
-  if(inpaintLoading) return inpaintLoading;
-  inpaintLoading=(async()=>{
-    try{
-      if(!("gpu" in navigator)) throw new Error("WebGPU unavailable");
-      setInpaintNote("loading runtime…");
-      ort=await import(ORT_URL);
-      ort.env.wasm.wasmPaths=ORT_WASM;
-      ort.env.wasm.numThreads=self.crossOriginIsolated ? Math.min(navigator.hardwareConcurrency||4,8) : 1;
-      if(navigator.storage && navigator.storage.persist){ try{ await navigator.storage.persist(); }catch(_){} }
-      const opts={ executionProviders:["webgpu","wasm"], graphOptimizationLevel:"all" };
-      sess.enc =await ort.InferenceSession.create(await getModelBytes("vae_encoder.onnx"), opts);
-      sess.dec =await ort.InferenceSession.create(await getModelBytes("vae_decoder.onnx"), opts);
-      sess.unet=await ort.InferenceSession.create(await getModelBytes("unet.onnx"), opts);
-      inpaintReady=true; inpaintAvailable=true; setInpaintNote("model ready");
-      return true;
-    }catch(err){ console.warn("Inpaint unavailable:",err); inpaintAvailable=false; setInpaintNote(""); return false; }
-  })();
-  return inpaintLoading;
-}
-
-// --- model bytes via CacheStorage (keyed by the stable HF url) ---
-async function getModelBytes(file){
-  const url=MODEL_BASE+"/"+file;
-  let cache=null; try{ cache=await caches.open(CACHE_NAME); }catch(_){}
-  if(cache){ const hit=await cache.match(url); if(hit){ setInpaintNote(`loaded ${file} (cached)`); return new Uint8Array(await hit.arrayBuffer()); } }
-  setInpaintNote(`downloading ${file}…`);
-  const resp=await fetch(url); if(!resp.ok) throw new Error("fetch "+file+" -> "+resp.status);
-  const total=Number(resp.headers.get("content-length"))||0;
-  const reader=resp.body.getReader(); const chunks=[]; let received=0;
-  for(;;){ const {done,value}=await reader.read(); if(done) break; chunks.push(value); received+=value.length;
-    if(total) setInpaintNote(`downloading ${file} ${(100*received/total|0)}%`); }
-  const bytes=new Uint8Array(received); let off=0; for(const c of chunks){ bytes.set(c,off); off+=c.length; }
-  if(cache){ try{ await cache.put(url, new Response(bytes.buffer,{headers:{"Content-Type":"application/octet-stream","Content-Length":String(bytes.length)}})); }catch(_){} }
-  return bytes;
-}
-
-// --- deterministic gaussian noise ---
-function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
-function randn(n, seed){ const rng=mulberry32(seed>>>0); const out=new Float32Array(n);
-  for(let k=0;k<n;k+=2){ let u=0,v=0; while(u===0)u=rng(); while(v===0)v=rng(); const r=Math.sqrt(-2*Math.log(u)), th=2*Math.PI*v;
-    out[k]=r*Math.cos(th); if(k+1<n) out[k+1]=r*Math.sin(th); }
-  return out; }
-
-// --- DDIM schedule (scaled_linear betas, strength 0.99 -> 19 steps) ---
-function makeDDIM(numSteps){
-  const train=1000, betaStart=0.00085, betaEnd=0.012, strength=0.99;
-  const acp=new Float64Array(train); const s0=Math.sqrt(betaStart), s1=Math.sqrt(betaEnd); let prod=1;
-  for(let t=0;t<train;t++){ const b=s0+(s1-s0)*t/(train-1); const beta=b*b; prod*=(1-beta); acp[t]=prod; }
-  const stepRatio=Math.floor(train/numSteps);
-  let ts=[]; for(let k=0;k<numSteps;k++) ts.push(Math.round(k*stepRatio));
-  ts.reverse();
-  const initTimestep=Math.floor(numSteps*strength);            // 19
-  const tStart=Math.max(numSteps-initTimestep,0);              // drop first step
-  return {timesteps:ts.slice(tStart), acp};
-}
-function ddimStep(eps, sample, t, prevT, acp){
-  const at=acp[t], atPrev= prevT>=0 ? acp[prevT] : 1.0;
-  const sqrtAt=Math.sqrt(at), sqrtBt=Math.sqrt(1-at), sqrtAtPrev=Math.sqrt(atPrev), sqrtBtPrev=Math.sqrt(1-atPrev);
-  const out=new Float32Array(sample.length);
-  for(let k=0;k<sample.length;k++){ const predX0=(sample[k]-sqrtBt*eps[k])/sqrtAt; out[k]=sqrtAtPrev*predX0+sqrtBtPrev*eps[k]; }
-  return out;
-}
-
-// --- canvas plumbing (crop / letterbox / tensors) ---
-function cropCanvas(w){ const [x0,y0,x1,y1]=w.box, bw=x1-x0, bh=y1-y0;
-  const c=document.createElement("canvas"); c.width=bw; c.height=bh; const cx=c.getContext("2d");
-  if(w.cleanCanvas) cx.drawImage(w.cleanCanvas,0,0,bw,bh);
-  else cx.drawImage(page, x0,y0,bw,bh, 0,0,bw,bh);
-  return c; }
-function maskBoxCanvas(w){ const [x0,y0,x1,y1]=w.box, bw=x1-x0, bh=y1-y0;   // transparent bg, white dabs (alpha = paint)
-  const c=document.createElement("canvas"); c.width=bw; c.height=bh; const cx=c.getContext("2d");
-  cx.fillStyle="#fff"; for(const d of (w.erase||[])){ cx.beginPath(); cx.arc(d[0],d[1],d[2],0,7); cx.fill(); }
-  return c; }
-function letterboxInto(src, fill){                                          // "contain" into 512x512, keep content rect
-  const sw=src.width, sh=src.height, scale=Math.min(IMG/sw,IMG/sh);
-  const w=Math.round(sw*scale), h=Math.round(sh*scale), x=Math.floor((IMG-w)/2), y=Math.floor((IMG-h)/2);
-  const c=document.createElement("canvas"); c.width=IMG; c.height=IMG; const cx=c.getContext("2d");
-  if(fill){ cx.fillStyle=fill; cx.fillRect(0,0,IMG,IMG); }
-  cx.drawImage(src,x,y,w,h); return {canvas:c, rect:{x,y,w,h}};
-}
-function canvasToCHW(c){ const d=c.getContext("2d").getImageData(0,0,IMG,IMG).data, plane=IMG*IMG, out=new Float32Array(3*plane);
-  for(let p=0;p<plane;p++){ out[p]=d[p*4]/127.5-1; out[plane+p]=d[p*4+1]/127.5-1; out[2*plane+p]=d[p*4+2]/127.5-1; }
-  return out; }
-function maskBinary(c){ const d=c.getContext("2d").getImageData(0,0,IMG,IMG).data, plane=IMG*IMG, out=new Float32Array(plane);
-  for(let p=0;p<plane;p++) out[p]= d[p*4+3]>=128 ? 1:0;                      // painted-overlay alpha >= 128 -> 1
-  return out; }
-function makeMaskedCHW(chw, maskBin){ const plane=IMG*IMG, out=new Float32Array(3*plane);
-  for(let c=0;c<3;c++) for(let p=0;p<plane;p++) out[c*plane+p]=chw[c*plane+p]*(1-maskBin[p]); // hole -> 0 (mid-gray in [-1,1])
-  return out; }
-function maskToLatent(maskBin){ const out=new Float32Array(LAT*LAT);        // PyTorch-nearest: top-left of each 8x8 block
-  for(let y=0;y<LAT;y++) for(let x=0;x<LAT;x++) out[y*LAT+x]=maskBin[(y*8)*IMG+(x*8)];
-  return out; }
-const firstOut=o=>Object.values(o)[0];
-
-async function encode(chw){ const o=await sess.enc.run({image:new ort.Tensor("float32",chw,[1,3,IMG,IMG])});
-  const m=(o.moments||firstOut(o)).data, plane=LAT*LAT, out=new Float32Array(4*plane);
-  for(let k=0;k<4*plane;k++) out[k]=m[k]*SCALING_FACTOR; return out; }
-async function decode(latent){ const plane=LAT*LAT, inp=new Float32Array(4*plane);
-  for(let k=0;k<4*plane;k++) inp[k]=latent[k]/SCALING_FACTOR;
-  const o=await sess.dec.run({latent:new ort.Tensor("float32",inp,[1,4,LAT,LAT])});
-  const img=(o.image||firstOut(o)).data, plane2=IMG*IMG, out=new Uint8ClampedArray(plane2*4);
-  for(let p=0;p<plane2;p++){ out[p*4]=Math.round((img[p]+1)*127.5); out[p*4+1]=Math.round((img[plane2+p]+1)*127.5); out[p*4+2]=Math.round((img[2*plane2+p]+1)*127.5); out[p*4+3]=255; }
-  return new ImageData(out,IMG,IMG); }
-async function unetCFG(latents, mask64, maskedLat, t, guidance){
-  const plane=LAT*LAT, nine=new Float32Array(9*plane);
-  nine.set(latents.subarray(0,4*plane),0);            // ch0-3 noisy latent
-  nine.set(mask64,4*plane);                           // ch4 mask
-  nine.set(maskedLat.subarray(0,4*plane),5*plane);    // ch5-8 masked-image latent
-  const nine2=new Float32Array(2*9*plane); nine2.set(nine,0); nine2.set(nine,9*plane);
-  const ids=new BigInt64Array(2*10); for(let k=0;k<10;k++){ ids[k]=BigInt(10+k); ids[10+k]=BigInt(k); } // uncond,cond
-  const o=await sess.unet.run({
-    latent:new ort.Tensor("float32",nine2,[2,9,LAT,LAT]),
-    timesteps:new ort.Tensor("int64",new BigInt64Array([BigInt(t),BigInt(t)]),[2]),
-    input_ids:new ort.Tensor("int64",ids,[2,10]),
-  });
-  const noise=(o.noise||firstOut(o)).data, n=4*plane, cfg=new Float32Array(n);
-  for(let k=0;k<n;k++){ const u=noise[k], c=noise[n+k]; cfg[k]=u+guidance*(c-u); }
-  return cfg; }
-
-// --- composite the 512 result back over the crop, crop to content rect, bake to box size ---
-function bakeResult(w, resultData, rect){
-  const [x0,y0,x1,y1]=w.box, bw=x1-x0, bh=y1-y0;
-  const rc=document.createElement("canvas"); rc.width=IMG; rc.height=IMG; rc.getContext("2d").putImageData(resultData,0,0);
-  const lb=letterboxInto(cropCanvas(w),"#000").canvas;                       // original (letterboxed)
-  const am=letterboxInto(maskBoxCanvas(w),null).canvas;                      // alpha mask (letterboxed, no fill)
-  const fm=document.createElement("canvas"); fm.width=IMG; fm.height=IMG; const fmx=fm.getContext("2d");
-  fmx.filter="blur(3px)"; fmx.drawImage(am,0,0); fmx.filter="none";          // feathered mask
-  const mr=document.createElement("canvas"); mr.width=IMG; mr.height=IMG; const mrx=mr.getContext("2d");
-  mrx.drawImage(rc,0,0); mrx.globalCompositeOperation="destination-in"; mrx.drawImage(fm,0,0); // result ∧ feathered mask
-  const fin=document.createElement("canvas"); fin.width=IMG; fin.height=IMG; const fx=fin.getContext("2d");
-  fx.drawImage(lb,0,0); fx.drawImage(mr,0,0);                               // original, then masked result on top
-  const out=document.createElement("canvas"); out.width=bw; out.height=bh; const ox=out.getContext("2d");
-  ox.drawImage(fin, rect.x,rect.y,rect.w,rect.h, 0,0,bw,bh);                // crop letterbox back, scale to box
-  w.cleanCanvas=out; w.clean=out.toDataURL("image/png"); w.erase=[];        // clear mask: cleaned crop now shows through
-}
-function whiteFillFallback(w){ const [x0,y0,x1,y1]=w.box, bw=x1-x0, bh=y1-y0;
-  const out=document.createElement("canvas"); out.width=bw; out.height=bh; const ox=out.getContext("2d");
-  if(w.cleanCanvas) ox.drawImage(w.cleanCanvas,0,0,bw,bh); else ox.drawImage(page, x0,y0,bw,bh, 0,0,bw,bh);
-  ox.fillStyle="#fff"; for(const d of (w.erase||[])){ ox.beginPath(); ox.arc(d[0],d[1],d[2],0,7); ox.fill(); }
-  w.cleanCanvas=out; w.clean=out.toDataURL("image/png"); w.erase=[]; }
-
-async function runInpaint(){
-  if(!words.length || inpainting) return;
-  const w=words[i];
-  if(!(w.erase && w.erase.length)){ alert("Paint a mask over the non-letter ink first (Inpaint tool)."); return; }
-  inpainting=true; $("runInpaint").disabled=true;
-  try{
-    setInpaintNote("preparing…");
-    const ok=await ensureInpaint();
-    if(!ok){ whiteFillFallback(w); draw(); setInpaintNote(""); alert("WebGPU/model unavailable — used white-fill fallback."); return; }
-    try{
-      const {rect}=letterboxInto(cropCanvas(w),"#000");
-      const imgCHW   = canvasToCHW(letterboxInto(cropCanvas(w),"#000").canvas);
-      const maskBin  = maskBinary(letterboxInto(maskBoxCanvas(w),null).canvas);
-      const maskedCHW= makeMaskedCHW(imgCHW, maskBin);
-      const mask64   = maskToLatent(maskBin);
-      const maskedLat= await encode(maskedCHW);
-      const plane=LAT*LAT; let latents=randn(4*plane, INP_SEED);
-      const offs=randn(4, INP_SEED^0x9e3779b9);
-      for(let c=0;c<4;c++) for(let p=0;p<plane;p++) latents[c*plane+p]+=NOISE_OFFSET*offs[c];
-      const ddim=makeDDIM(INP_STEPS), tl=ddim.timesteps;
-      for(let s=0;s<tl.length;s++){ const t=tl[s], prevT=s+1<tl.length?tl[s+1]:-1;
-        setInpaintNote(`inpainting ${s+1}/${tl.length}…`);
-        const eps=await unetCFG(latents, mask64, maskedLat, t, INP_GUIDANCE);
-        latents=ddimStep(eps, latents, t, prevT, ddim.acp);
-        await new Promise(r=>setTimeout(r,0)); }
-      const result=await decode(latents);
-      bakeResult(w, result, rect);
-      draw(); setInpaintNote("done");
-    }catch(err){ console.warn("Inpaint run failed:",err); whiteFillFallback(w); draw(); setInpaintNote(""); alert("Inpaint failed — used white-fill fallback."); }
-  } finally { inpainting=false; $("runInpaint").disabled=false; }
-}
-$("runInpaint").onclick=runInpaint;
-
+window.addEventListener("keydown",e=>{ if(!words.length) return;
+  if((e.metaKey||e.ctrlKey) && (e.key==="z"||e.key==="Z")){ e.preventDefault(); e.shiftKey?redo():undo(); return; }
+  if(e.metaKey||e.ctrlKey){ if(e.key===" "){ e.preventDefault(); $("next").click(); } return; }
+  if(e.key===" ") { e.preventDefault(); return; }                 // bare space does nothing
+  if(e.key==="Enter"){ e.preventDefault(); $("done").click(); }
+  else if(e.key==="s") $("skip").click(); else if(e.key==="ArrowRight") $("next").click(); else if(e.key==="ArrowLeft") $("prev").click();
+  else if(e.key==="m") setTool("move"); else if(e.key==="c") setTool("cut"); else if(e.key==="e") setTool("erase"); });
 draw();
 </script>
 </body>

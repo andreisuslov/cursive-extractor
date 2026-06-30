@@ -65,12 +65,11 @@ python -m ocr.experiments.label_ingest --corrected labels_corrected.json --page-
   handle to slant, drag the line body to slide the whole cut, dbl-click / ⌥-click to add midpoints
   for curves, ⇧-click a handle to delete), slices coloured + labelled from the spelling (you only
   fix cuts; cuts auto-order left→right). **⌘Z / ⌘⇧Z** undo/redo, **⌘space** next, `⏎` done+next,
-  `s` skip. Plus an **Inpaint** tool (Moebius ONNX, WebGPU, lazy-loaded ~1.27 GB) — paint over
-  non-letter ink and "Run inpaint" to reconstruct paper (white-fill fallback if WebGPU/model
-  absent). Exports `{text, box, cuts(polylines), erase, clean?}`.
+  `s` skip. An **Eraser** paints over non-letter ink and fills it with the word's **paper colour**
+  (median of the crop) so it blends in — instant, no model. Exports `{text, box, cuts(polylines), erase}`.
 - `label_export.py` / `label_ingest.py` — feed the tool (CRAFT cuts) / turn corrections into labeled
-  per-letter crops (polygon-masked, uses the inpainted `clean` crop when present) — clean supply for
-  the font pipeline + real CRAFT weak-sup GT.
+  per-letter crops (polygon-masked; outside-polygon + erased pixels filled with the paper colour) —
+  clean supply for the font pipeline + real CRAFT weak-sup GT.
 
 ## The one blocker
 

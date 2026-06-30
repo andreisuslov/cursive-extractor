@@ -9,6 +9,16 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-30 — reverted Moebius inpaint → paper-colour eraser (too slow)
+
+The in-browser Moebius inpaint was too slow to work with, so removed it entirely (no ONNX/WebGPU/
+DDIM left) and replaced with a lightweight **paper-colour eraser**: sample the word crop's median
+colour (ink is a minority) and fill erased dabs with it, so removed ink blends into the paper —
+instant. Kept all the other upgrades (whole-line drag, add-points, ⌘Z/⌘⇧Z undo-redo, ⌘space, L→R
+cut auto-ordering). `label_ingest` now fills outside-polygon + erased pixels with the paper colour
+(median of the crop) instead of white; export drops the `clean` field. Tool rewritten clean, JS
+`node --check`ed; ingest tests updated.
+
 ## 2026-06-30 — labeller upgrades (whole-line drag, undo/redo, ⌘space, Moebius inpaint)
 
 Built via an ultracode workflow (research → implement → 2 adversarial verifiers, both ok=true).
