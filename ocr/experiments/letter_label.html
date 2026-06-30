@@ -26,15 +26,22 @@
     cut to add a midpoint (curve), <kbd>shift</kbd>+click a handle to delete. Labels auto-fill from
     the spelling (cuts auto-order left→right). <b>+Cut</b>: click to drop a new cut.
     <b>Eraser</b>: paint over non-letter ink — it's filled with the paper colour.
+    <b>Pan img</b>: drag to move the underlying image when a word (e.g. "John") was mis-captured;
+    <b>grow/shrink box</b> resizes the frame. Progress <b>auto-saves</b> to this browser; <b>resume</b>
+    re-imports an exported <code>labels_corrected.json</code>.
     <kbd>⌘space</kbd> next · <kbd>⏎</kbd> done+next · <kbd>s</kbd> skip · <kbd>←/→</kbd> move ·
     <kbd>⌘Z</kbd> undo · <kbd>⌘⇧Z</kbd> redo.</p>
 
   <div class="row">
     <input type="file" id="file" accept="application/json" />
+    resume <input type="file" id="resume" accept="application/json" title="load a previously exported labels_corrected.json" />
     <span class="sep"></span>
     <button id="tMove" class="on">Move</button>
     <button id="tCut">+ Cut</button>
     <button id="tErase">Eraser</button>
+    <button id="tPan">Pan img</button>
+    <button id="grow">grow box</button>
+    <button id="shrink">shrink box</button>
     brush <input type="range" id="brush" min="4" max="40" value="12" style="width:80px">
     <button id="clearErase">clear erase</button>
     <button id="auto">reset cuts</button>
@@ -55,7 +62,7 @@
 <script>
 const PAD=16, LBLH=40, HANDLE_HIT=10, SEG_HIT=8;
 let words=[], i=0, page=new Image(), base={}, tool="move", drag=null, erasing=false;
-let undoStack=[], redoStack=[];
+let undoStack=[], redoStack=[], sig=null, saveT=null;
 const clone=o=>JSON.parse(JSON.stringify(o));
 const cv=document.getElementById("cv"), ctx=cv.getContext("2d"), $=id=>document.getElementById(id);
 const COLORS=["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
@@ -103,7 +110,7 @@ function draw(){ ctx.clearRect(0,0,cv.width,cv.height); if(!words.length) return
   $("word").textContent=`"${w.text}"`+(w.skip?" (skipped)":"");
   $("status").innerHTML=have===need?`<span class="ok">${have}/${need} cuts ✓</span>`:`<span class="bad">${have}/${need} cuts</span>`;
   const dn=words.filter(x=>x.done||x.skip).length;
-  $("progress").textContent=`${i+1}/${words.length} · ${dn} done`; $("barfill").style.width=(100*dn/words.length)+"%"; }
+  $("progress").textContent=`${i+1}/${words.length} · ${dn} done`; $("barfill").style.width=(100*dn/words.length)+"%"; scheduleSave(); }
 
 function mx(e){return e.offsetX*(cv.width/cv.getBoundingClientRect().width);}
 function my(e){return e.offsetY*(cv.height/cv.getBoundingClientRect().height);}
@@ -115,14 +122,18 @@ function nearestCut(px,py){ const T=view(); let best=null;
 function segDist(px,py,ax,ay,bx,by){ const dx=bx-ax,dy=by-ay,L=dx*dx+dy*dy||1; let t=((px-ax)*dx+(py-ay)*dy)/L; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(ax+t*dx),py-(ay+t*dy)); }
 
 // undo/redo over per-word cuts + erase
-function snap(){ return {i, cuts:clone(words[i].cuts), erase:clone(words[i].erase||[])}; }
-function applySnap(s){ i=s.i; words[i].cuts=clone(s.cuts); words[i].erase=clone(s.erase); draw(); }
+function snap(){ return {i, box:clone(words[i].box), cuts:clone(words[i].cuts), erase:clone(words[i].erase||[])}; }
+function applySnap(s){ i=s.i; words[i].box=clone(s.box); words[i].cuts=clone(s.cuts); words[i].erase=clone(s.erase); words[i].paper=null; draw(); }
 function pushUndo(){ undoStack.push(snap()); if(undoStack.length>200) undoStack.shift(); redoStack=[]; }
 function undo(){ if(!undoStack.length)return; redoStack.push(snap()); applySnap(undoStack.pop()); }
 function redo(){ if(!redoStack.length)return; undoStack.push(snap()); applySnap(redoStack.pop()); }
+// auto-save per-word progress (cuts/erase/box/done) to localStorage so reloads don't lose work
+function scheduleSave(){ if(!sig) return; clearTimeout(saveT); saveT=setTimeout(()=>{ try{
+  localStorage.setItem(sig, JSON.stringify(words.map(w=>({text:w.text,box:w.box,cuts:w.cuts,erase:w.erase||[],done:!!w.done})))); }catch(_e){} }, 500); }
 
 cv.addEventListener("mousedown",e=>{ if(!words.length) return; const T=view(),X=mx(e),Y=my(e);
   if(tool==="erase"){ pushUndo(); erasing=true; addDab(X,Y); return; }
+  if(tool==="pan"){ drag={pan:true, sx:X, sy:Y, box:clone(words[i].box)}; return; }
   if(tool==="cut"){ pushUndo(); words[i].cuts.push([[T.fromX(X),0],[T.fromX(X),T.bh]]); draw(); return; }
   if(e.altKey){ const nc=nearestCut(X,Y); if(nc&&nc.d<SEG_HIT){ pushUndo(); words[i].cuts[nc.ci].push([T.fromX(X),T.fromY(Y)]); words[i].cuts[nc.ci].sort((a,b)=>a[1]-b[1]); draw(); } return; }
   const np=nearestPoint(X,Y);
@@ -132,18 +143,27 @@ cv.addEventListener("mousemove",e=>{ if(!words.length) return; const T=view(),X=
   if(erasing){ addDab(X,Y); return; }
   if(!drag) return;
   if(!drag.snapped){ pushUndo(); drag.snapped=true; }              // one undo entry per drag gesture
-  if(drag.whole){ const dx=T.fromX(X)-drag.startX; words[i].cuts[drag.ci]=drag.orig.map(p=>[Math.max(0,Math.min(T.bw,p[0]+dx)),p[1]]); }
+  if(drag.pan){ const dpx=(X-drag.sx)/T.dw*T.bw, dpy=(Y-drag.sy)/T.dh*T.bh;  // pan: move image under the frame
+    const bw=drag.box[2]-drag.box[0], bh=drag.box[3]-drag.box[1];
+    let nx0=drag.box[0]-dpx, ny0=drag.box[1]-dpy;
+    nx0=Math.max(0,Math.min(page.naturalWidth-bw,nx0)); ny0=Math.max(0,Math.min(page.naturalHeight-bh,ny0));
+    words[i].box=[nx0,ny0,nx0+bw,ny0+bh]; words[i].paper=null; }
+  else if(drag.whole){ const dx=T.fromX(X)-drag.startX; words[i].cuts[drag.ci]=drag.orig.map(p=>[Math.max(0,Math.min(T.bw,p[0]+dx)),p[1]]); }
   else { const p=words[i].cuts[drag.ci][drag.pi]; p[0]=Math.max(0,Math.min(T.bw,T.fromX(X))); p[1]=Math.max(0,Math.min(T.bh,T.fromY(Y))); }
   draw(); });
-window.addEventListener("mouseup",()=>{ if(drag&&!drag.whole&&drag.snapped) words[i].cuts[drag.ci].sort((a,b)=>a[1]-b[1]); drag=null; erasing=false; });
+window.addEventListener("mouseup",()=>{ if(drag&&drag.pi!=null&&drag.snapped) words[i].cuts[drag.ci].sort((a,b)=>a[1]-b[1]); drag=null; erasing=false; });
 cv.addEventListener("dblclick",e=>{ if(!words.length||tool!=="move") return; const T=view(),X=mx(e),Y=my(e);
   const nc=nearestCut(X,Y); if(nc&&nc.d<12){ pushUndo(); words[i].cuts[nc.ci].push([T.fromX(X),T.fromY(Y)]); words[i].cuts[nc.ci].sort((a,b)=>a[1]-b[1]); draw(); } });
 function addDab(X,Y){ const T=view(),r=+$("brush").value; (words[i].erase=words[i].erase||[]).push([T.fromX(X),T.fromY(Y),r*T.bw/T.dw]); draw(); }
 
-function setTool(t){ tool=t; for(const[id,n] of [["tMove","move"],["tCut","cut"],["tErase","erase"]]) $(id).classList.toggle("on",n===t); }
-$("tMove").onclick=()=>setTool("move"); $("tCut").onclick=()=>setTool("cut"); $("tErase").onclick=()=>setTool("erase");
+function setTool(t){ tool=t; for(const[id,n] of [["tMove","move"],["tCut","cut"],["tErase","erase"],["tPan","pan"]]) $(id).classList.toggle("on",n===t); }
+$("tMove").onclick=()=>setTool("move"); $("tCut").onclick=()=>setTool("cut"); $("tErase").onclick=()=>setTool("erase"); $("tPan").onclick=()=>setTool("pan");
 $("clearErase").onclick=()=>{ if(words.length){pushUndo();words[i].erase=[];draw();} };
 $("auto").onclick=()=>{ if(words.length){pushUndo();words[i].cuts=clone(base[i]||[]);words[i].erase=[];draw();} };
+function resizeBox(f){ if(!words.length)return; pushUndo(); const w=words[i],[x0,y0,x1,y1]=w.box, cx=(x0+x1)/2, cy=(y0+y1)/2, hw=(x1-x0)*f/2, hh=(y1-y0)*f/2;
+  w.box=[Math.max(0,Math.round(cx-hw)), Math.max(0,Math.round(cy-hh)), Math.min(page.naturalWidth,Math.round(cx+hw)), Math.min(page.naturalHeight,Math.round(cy+hh))];
+  w.paper=null; draw(); }
+$("grow").onclick=()=>resizeBox(1.25); $("shrink").onclick=()=>resizeBox(1/1.25);
 function go(d){ i=Math.max(0,Math.min(words.length-1,i+d)); draw(); }
 $("prev").onclick=()=>go(-1); $("next").onclick=()=>go(1);
 $("done").onclick=()=>{ if(words.length){words[i].done=true;words[i].skip=false;go(1);} };
@@ -153,7 +173,18 @@ $("export").onclick=()=>{ const out=words.filter(w=>!w.skip).map(w=>({text:w.tex
 $("file").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
   r.onload=()=>{ const data=JSON.parse(r.result); words=data.words; undoStack=[]; redoStack=[];
     words.forEach((w,k)=>{ if(typeof (w.cuts[0])==="number") w.cuts=w.cuts.map(x=>[[x,0],[x,w.box[3]-w.box[1]]]); base[k]=clone(w.cuts); w.erase=w.erase||[]; });
+    sig="ll:"+words.length+":"+(words[0]?.text||"")+":"+(words[words.length-1]?.text||"");
+    try{ const sv=localStorage.getItem(sig);                       // auto-restore prior progress
+      if(sv && confirm("Restore your saved progress for this page?")){ JSON.parse(sv).forEach((s,k)=>{
+        if(words[k]&&words[k].text===s.text){ words[k].cuts=clone(s.cuts); words[k].erase=clone(s.erase||[]); words[k].done=!!s.done; if(s.box)words[k].box=clone(s.box); } }); } }catch(_e){}
     page=new Image(); page.onload=()=>{i=0;draw();}; page.src=data.page; };
+  r.readAsText(f); });
+// Resume: merge a previously exported labels_corrected.json onto the loaded words (matched by text, in order)
+$("resume").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f||!words.length)return; const r=new FileReader();
+  r.onload=()=>{ let saved; try{saved=JSON.parse(r.result);}catch(_e){alert("Not valid JSON");return;} let j=0,n=0;
+    for(let k=0;k<words.length && j<saved.length;k++){ if(words[k].text===saved[j].text){ const s=saved[j++];
+      words[k].cuts=clone(s.cuts); words[k].erase=clone(s.erase||[]); words[k].done=!!s.done; if(s.box)words[k].box=clone(s.box); words[k].paper=null; n++; } }
+    i=0; draw(); alert("Resumed "+n+" of "+saved.length+" saved words."); };
   r.readAsText(f); });
 window.addEventListener("keydown",e=>{ if(!words.length) return;
   if((e.metaKey||e.ctrlKey) && (e.key==="z"||e.key==="Z")){ e.preventDefault(); e.shiftKey?redo():undo(); return; }
