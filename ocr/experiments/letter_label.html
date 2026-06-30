@@ -23,8 +23,10 @@
   <h2>Letter labeller</h2>
   <p class="muted">Load <code>label_review.json</code>. Cuts are <b>polylines</b> — drag a handle
     (top/bottom = slant), drag the line body to slide the whole cut, dbl-click / <kbd>⌥</kbd>-click a
-    cut to add a midpoint (curve), <kbd>shift</kbd>+click a handle to delete. Labels auto-fill from
-    the spelling (cuts auto-order left→right). <b>+Cut</b>: click to drop a new cut.
+    cut to add a midpoint (curve), <kbd>shift</kbd>+click a handle to delete a point. Labels auto-fill
+    from the spelling (cuts auto-order left→right). <b>Right-click</b> anywhere: on a cut removes it,
+    on empty space adds one (any tool) — use this to match the cut count after editing a word.
+    <b>+Cut</b>: click to drop a new cut.
     <b>Eraser</b>: paint over non-letter ink — it's filled with the paper colour.
     <b>Pan img</b>: drag to move the underlying image when a word (e.g. "John") was mis-captured;
     <b>grow/shrink box</b> resizes the frame; <kbd>⌘</kbd>+scroll / trackpad pinch <b>zooms</b> toward
@@ -133,7 +135,7 @@ function redo(){ if(!redoStack.length)return; undoStack.push(snap()); applySnap(
 function scheduleSave(){ if(!sig) return; clearTimeout(saveT); saveT=setTimeout(()=>{ try{
   localStorage.setItem(sig, JSON.stringify(words.map(w=>({text:w.text,box:w.box,cuts:w.cuts,erase:w.erase||[],done:!!w.done,skip:!!w.skip})))); }catch(_e){} }, 500); }
 
-cv.addEventListener("mousedown",e=>{ if(!words.length) return; const T=view(),X=mx(e),Y=my(e);
+cv.addEventListener("mousedown",e=>{ if(!words.length||e.button!==0||e.ctrlKey) return; const T=view(),X=mx(e),Y=my(e);
   if(tool==="erase"){ pushUndo(); erasing=true; addDab(X,Y); return; }
   if(tool==="pan"){ drag={pan:true, sx:X, sy:Y, box:clone(words[i].box)}; return; }
   if(tool==="cut"){ pushUndo(); words[i].cuts.push([[T.fromX(X),0],[T.fromX(X),T.bh]]); draw(); return; }
@@ -156,6 +158,12 @@ cv.addEventListener("mousemove",e=>{ if(!words.length) return; const T=view(),X=
 window.addEventListener("mouseup",()=>{ if(drag&&drag.pi!=null&&drag.snapped) words[i].cuts[drag.ci].sort((a,b)=>a[1]-b[1]); drag=null; erasing=false; });
 cv.addEventListener("dblclick",e=>{ if(!words.length||tool!=="move") return; const T=view(),X=mx(e),Y=my(e);
   const nc=nearestCut(X,Y); if(nc&&nc.d<12){ pushUndo(); words[i].cuts[nc.ci].push([T.fromX(X),T.fromY(Y)]); words[i].cuts[nc.ci].sort((a,b)=>a[1]-b[1]); draw(); } });
+// right-click anywhere: on a cut -> remove that whole cut; on empty -> add a cut (works in any tool)
+cv.addEventListener("contextmenu",e=>{ e.preventDefault(); if(!words.length) return; const T=view(),X=mx(e),Y=my(e);
+  const nc=nearestCut(X,Y);
+  if(nc&&nc.d<14){ pushUndo(); words[i].cuts.splice(nc.ci,1); }
+  else { pushUndo(); words[i].cuts.push([[T.fromX(X),0],[T.fromX(X),T.bh]]); }
+  draw(); });
 function addDab(X,Y){ const T=view(),r=+$("brush").value; (words[i].erase=words[i].erase||[]).push([T.fromX(X),T.fromY(Y),r*T.bw/T.dw]); draw(); }
 // ⌘/ctrl + scroll (or trackpad pinch) = zoom the frame toward the cursor (resize the box, keeping
 // the page point under the cursor fixed). Scroll up / pinch-out = closer; down / pinch-in = farther.
