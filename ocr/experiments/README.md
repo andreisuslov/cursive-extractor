@@ -61,12 +61,16 @@ python -m ocr.experiments.label_export --page-dir <dir> --out <dir>/label_review
 python -m ocr.experiments.label_ingest --corrected labels_corrected.json --page-dir <dir> --out-dir letters/
 ```
 
-- `letter_label.html` — per word: the real crop + CRAFT's cuts as **draggable polylines** (top/bottom
-  handles for slant, dbl-click to add midpoints for curves), an **eraser** brush to white-out
-  non-letter ink, slices coloured + labelled from the spelling (you only fix cuts). `space` = next,
-  `⏎` = done+next, `s` = skip; exports `{text, box, cuts(polylines), erase}`.
+- `letter_label.html` — per word: the real crop + CRAFT's cuts as **draggable polylines** (drag a
+  handle to slant, drag the line body to slide the whole cut, dbl-click / ⌥-click to add midpoints
+  for curves, ⇧-click a handle to delete), slices coloured + labelled from the spelling (you only
+  fix cuts; cuts auto-order left→right). **⌘Z / ⌘⇧Z** undo/redo, **⌘space** next, `⏎` done+next,
+  `s` skip. Plus an **Inpaint** tool (Moebius ONNX, WebGPU, lazy-loaded ~1.27 GB) — paint over
+  non-letter ink and "Run inpaint" to reconstruct paper (white-fill fallback if WebGPU/model
+  absent). Exports `{text, box, cuts(polylines), erase, clean?}`.
 - `label_export.py` / `label_ingest.py` — feed the tool (CRAFT cuts) / turn corrections into labeled
-  per-letter crops (clean supply for the font pipeline + real CRAFT weak-sup GT).
+  per-letter crops (polygon-masked, uses the inpainted `clean` crop when present) — clean supply for
+  the font pipeline + real CRAFT weak-sup GT.
 
 ## The one blocker
 

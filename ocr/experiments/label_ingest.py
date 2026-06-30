@@ -14,51 +14,66 @@ import json
 import os
 
 
-def _boundaries(box, cuts):
-    """left edge, the cut polylines (sorted top->bottom), right edge -- in crop-local coords."""
-    bw, bh = box[2] - box[0], box[3] - box[1]
-    polys = [sorted(c, key=lambda p: p[1]) for c in cuts]
-    return [[[0, 0], [0, bh]], *polys, [[bw, 0], [bw, bh]]]
+def _ordered_cuts(cuts):
+    """Cuts ordered left-to-right by mean x, so slice k maps to text[k] (the tool may store cuts
+    out of order after a whole-line drag or a +Cut placed left of others)."""
+    return sorted(cuts, key=lambda c: sum(p[0] for p in c) / len(c))
 
 
-def letter_polys(box, cuts, text):
-    """Per-letter ``(char, polygon[[x,y]...] page px)`` between consecutive boundary polylines.
-
-    Cuts are polylines (slanted/curved), so each letter is a polygon, not a rectangle."""
-    x0, y0 = box[0], box[1]
-    bnds = _boundaries(box, cuts)
+def letter_polys(cuts, bw, bh, text):
+    """Per-letter ``(char, polygon[[x,y]...])`` in CROP-LOCAL coords, between consecutive
+    boundary polylines (left edge, the L-1 ordered cuts, right edge). Cuts are polylines
+    (slanted/curved), so each letter is a polygon, not a rectangle."""
+    srt = [sorted(c, key=lambda p: p[1]) for c in _ordered_cuts(cuts)]
+    bnds = [[[0, 0], [0, bh]], *srt, [[bw, 0], [bw, bh]]]
     out = []
     for k in range(len(bnds) - 1):
         if k >= len(text):
             break
         a, b = bnds[k], bnds[k + 1]
-        poly = [[x0 + px, y0 + py] for px, py in a] + [[x0 + px, y0 + py] for px, py in reversed(b)]
-        out.append((text[k], poly))
+        out.append((text[k], [list(p) for p in a] + [list(p) for p in reversed(b)]))
     return out
 
 
+def _decode_clean(data_url):
+    """Decode an inpainted-crop data-URL (PNG) -> RGB ndarray."""
+    import base64
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    raw = base64.b64decode(data_url.split(",", 1)[1])
+    return np.array(Image.open(io.BytesIO(raw)).convert("RGB"))
+
+
 def ingest(corrected, page_rgb):
-    """List of ``(char, letter_crop_ndarray)`` — each letter masked to its polygon, with the
-    word's eraser dabs whited out. From corrected words + the page image."""
+    """List of ``(char, letter_crop_ndarray)`` — each letter masked to its polygon. Uses the
+    word's inpainted ``clean`` crop if present (ink already removed), else the page crop with the
+    eraser dabs whited out."""
     import cv2
     import numpy as np
 
     letters = []
     for w in corrected:
-        erase = w.get("erase", [])
-        ox, oy = w["box"][0], w["box"][1]
-        for ch, poly in letter_polys(w["box"], w["cuts"], w["text"]):
+        x0, y0, x1, y1 = w["box"]
+        bw, bh = x1 - x0, y1 - y0
+        if w.get("clean"):
+            src, erase = _decode_clean(w["clean"]), []  # ink already baked out
+        else:
+            src, erase = page_rgb[y0:y1, x0:x1].copy(), w.get("erase", [])
+        for ch, poly in letter_polys(w["cuts"], bw, bh, w["text"]):
             pts = np.array(poly, np.int32)
-            bx0, bx1 = pts[:, 0].min(), pts[:, 0].max()
-            by0, by1 = pts[:, 1].min(), pts[:, 1].max()
+            bx0, by0 = max(0, pts[:, 0].min()), max(0, pts[:, 1].min())
+            bx1, by1 = min(src.shape[1], pts[:, 0].max()), min(src.shape[0], pts[:, 1].max())
             if bx1 - bx0 < 2 or by1 - by0 < 2:
                 continue
-            sub = page_rgb[by0:by1, bx0:bx1].copy()
+            sub = src[by0:by1, bx0:bx1].copy()
             mask = np.zeros(sub.shape[:2], np.uint8)
             cv2.fillPoly(mask, [pts - [bx0, by0]], 255)
-            for ex, ey, er in erase:  # erase dabs (crop-local -> sub-crop coords)
-                cv2.circle(mask, (int(ox + ex - bx0), int(oy + ey - by0)), int(er), 0, -1)
-            sub[mask == 0] = 255  # whiten outside the polygon + erased ink
+            for ex, ey, er in erase:  # eraser dabs are crop-local
+                cv2.circle(mask, (int(ex - bx0), int(ey - by0)), int(er), 0, -1)
+            sub[mask == 0] = 255  # whiten outside the polygon (+ erased ink)
             letters.append((ch, sub))
     return letters
 

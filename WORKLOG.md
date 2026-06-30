@@ -9,6 +9,27 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-30 — labeller upgrades (whole-line drag, undo/redo, ⌘space, Moebius inpaint)
+
+Built via an ultracode workflow (research → implement → 2 adversarial verifiers, both ok=true).
+`letter_label.html` now: (1) **whole-line drag** — grab a cut's line (not a handle) to slide the
+whole boundary; (2) add midpoints to bend (dbl/⌥-click); (3) **⌘Z/⌘⇧Z undo-redo** over per-word
+cut+mask state; (4) **⌘space** = next, bare space does nothing; (5) the eraser is replaced by a
+**Moebius inpaint** tool (the post the user linked) — onnxruntime-web + WebGPU runs the real
+3-graph latent-diffusion pipeline (VAE enc + UNet + VAE dec, 19-step DDIM, mask = UNet ch4, 512²,
+~1.27 GB lazy-loaded + CacheStorage), baking a cleaned crop; white-fill fallback if WebGPU/model
+absent so the tool never breaks.
+
+Post-workflow fixes I made: cuts now **auto-order left→right** (`cutX`) in `boundaries()`, export,
+and the Python `label_ingest` — without it a `+Cut` placed left of others (easy now with whole-line
+drag) mislabels every slice (caught by the verifier). `label_ingest` rewritten: local-coord polygon
+masks, consumes the inpainted `clean` data-URL when present, eraser dabs crop-local. Tests cover
+ordering + eraser + clean path; HTML `node --check`ed.
+
+Honest caveats (flagged to user): the inpaint port is faithful per review but **untested in a
+browser** (needs WebGPU + the 1.27 GB model); macOS ⌘Space is taken by Spotlight so it may not reach
+the page; inpaint result itself isn't on the undo stack (the mask is).
+
 ## 2026-06-30 — letter labelling tool (human-verified labels, the real lever)
 
 Self-labels didn't improve the cutter (v5), so built the human-in-the-loop path the user picked
