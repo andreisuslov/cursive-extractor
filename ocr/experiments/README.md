@@ -49,6 +49,24 @@ python -m ocr.experiments.craft_train     # synthetic -> craft_weights/craft_fin
 python -m ocr.experiments.craft_weaksup --page-dir outputs/<pdf>/page_001  # -> ..._v4.pth (default)
 ```
 
+## Human-in-the-loop letter labelling
+
+The lever that actually improves the cutter: human-verified labels (self-labels didn't help, see
+WORKLOG). Workflow — fix cuts in the browser, labels auto-fill from the transcript:
+
+```bash
+python -m ocr.refine_boxes --boxes <boxes.json> --out <dir>/boxes_refined.json --page <page.png> --tighten
+python -m ocr.experiments.label_export --page-dir <dir> --out <dir>/label_review.json   # CRAFT pre-cuts
+# open ocr/experiments/letter_label.html, load label_review.json, drag cuts, Export -> labels_corrected.json
+python -m ocr.experiments.label_ingest --corrected labels_corrected.json --page-dir <dir> --out-dir letters/
+```
+
+- `letter_label.html` — per word: the real crop + CRAFT's cut lines (draggable), each slice coloured
+  and labelled from the spelling; you only fix cuts. Space = done+next, `s` = skip, exports verified
+  `{text, box, cuts}`.
+- `label_export.py` / `label_ingest.py` — feed the tool (CRAFT cuts) / turn corrections into labeled
+  per-letter crops (clean supply for the font pipeline + real CRAFT weak-sup GT).
+
 ## The one blocker
 
 Everything is wired end-to-end and the **backend is proven**: `font_backend_demo.png` shows a

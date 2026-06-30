@@ -9,6 +9,17 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-30 — letter labelling tool (human-verified labels, the real lever)
+
+Self-labels didn't improve the cutter (v5), so built the human-in-the-loop path the user picked
+(cut-editor + auto-labels). `letter_label.html`: per word it shows the real crop with CRAFT's
+proposed cut lines (draggable, dbl-click add, shift-click delete), colours each slice and labels it
+from the transcript — the human only fixes cuts, no typing. `label_export.py` runs CRAFT v4 to
+pre-place the cuts (page-1: 233 words → `label_review.json`); `label_ingest.py` splits each word at
+the confirmed cuts into labeled per-letter crops (clean supply for the font pipeline + real CRAFT
+weak-sup GT). Pure box-split logic unit-tested; JS syntax-checked. Next: ingest the user's verified
+labels and re-run weak-sup with REAL GT (the lever self-labels couldn't provide).
+
 ## 2026-06-30 — CRAFT v5: scaling weak-supervision 15x did NOT help (honest negative)
 
 Pushed weak-supervision from 1 page (25 labels, v4) to **6 same-writer pages (386 pseudo-labels,
