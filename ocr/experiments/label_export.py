@@ -39,8 +39,15 @@ def export_page(page_dir: str, segmenter: CraftSegmenter) -> dict:
         if x1 - x0 < 8 or y1 - y0 < 5:
             continue
         cuts = segmenter.cut_word(arr[y0:y1, x0:x1], t)
+        bh = y1 - y0
         words.append(
-            {"text": t, "box": [x0, y0, x1, y1], "cuts": [round(float(c), 1) for c in cuts]}
+            {
+                "text": t,
+                "box": [x0, y0, x1, y1],
+                # each cut is a polyline (top->bottom) so it can be slanted/curved in the tool
+                "cuts": [[[round(float(c), 1), 0], [round(float(c), 1), bh]] for c in cuts],
+                "erase": [],
+            }
         )
     buf = io.BytesIO()
     page.save(buf, "JPEG", quality=85)

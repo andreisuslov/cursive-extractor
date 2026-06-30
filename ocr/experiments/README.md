@@ -61,9 +61,10 @@ python -m ocr.experiments.label_export --page-dir <dir> --out <dir>/label_review
 python -m ocr.experiments.label_ingest --corrected labels_corrected.json --page-dir <dir> --out-dir letters/
 ```
 
-- `letter_label.html` — per word: the real crop + CRAFT's cut lines (draggable), each slice coloured
-  and labelled from the spelling; you only fix cuts. Space = done+next, `s` = skip, exports verified
-  `{text, box, cuts}`.
+- `letter_label.html` — per word: the real crop + CRAFT's cuts as **draggable polylines** (top/bottom
+  handles for slant, dbl-click to add midpoints for curves), an **eraser** brush to white-out
+  non-letter ink, slices coloured + labelled from the spelling (you only fix cuts). `space` = next,
+  `⏎` = done+next, `s` = skip; exports `{text, box, cuts(polylines), erase}`.
 - `label_export.py` / `label_ingest.py` — feed the tool (CRAFT cuts) / turn corrections into labeled
   per-letter crops (clean supply for the font pipeline + real CRAFT weak-sup GT).
 

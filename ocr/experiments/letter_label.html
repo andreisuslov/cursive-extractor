@@ -2,124 +2,146 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Letter labeller — fix cuts, labels auto-fill</title>
+<title>Letter labeller — polyline cuts + eraser</title>
 <style>
-  body { font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; margin: 18px; color: #1a1a1a; }
-  #wrap { max-width: 1000px; }
-  canvas { border: 1px solid #ccc; border-radius: 6px; width: 100%; height: 300px; touch-action: none; background:#fff; }
-  .row { display: flex; gap: 10px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
-  button { padding: 6px 12px; border: 1px solid #bbb; border-radius: 6px; background: #f6f6f6; cursor: pointer; }
-  button:hover { background: #eee; }
+  body { font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; color: #1a1a1a; }
+  #wrap { max-width: 1100px; }
+  canvas { border: 1px solid #ccc; border-radius: 6px; width: 100%; height: 340px; touch-action: none; background:#fff; cursor: crosshair; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+  button { padding: 6px 11px; border: 1px solid #bbb; border-radius: 6px; background: #f6f6f6; cursor: pointer; }
+  button:hover { background: #eee; } button.on { background: #1f77b4; color: #fff; border-color:#1f77b4; }
   #word { font-size: 22px; font-weight: 700; letter-spacing: 1px; }
   .muted { color: #666; } .ok { color: #2e7d32; font-weight:600; } .bad { color: #b03030; font-weight:600; }
   kbd { background: #eee; border: 1px solid #ccc; border-radius: 3px; padding: 0 5px; font-size:12px; }
   #bar { height: 6px; background:#eee; border-radius:3px; overflow:hidden; flex:1; min-width:120px; }
   #barfill { height:100%; background:#2e7d32; width:0%; }
+  .sep { width:1px; height:24px; background:#ddd; margin:0 4px; }
 </style>
 </head>
 <body>
 <div id="wrap">
   <h2>Letter labeller</h2>
-  <p class="muted">Load <code>label_review.json</code> (from <code>python -m ocr.experiments.label_export</code>).
-    For each word, drag the red cut lines so every coloured slice is exactly one letter — the
-    letters under the crop are filled in from the spelling automatically. You need
-    <b>(letters − 1)</b> cuts. <kbd>dbl-click</kbd> add · <kbd>shift</kbd>+click delete ·
-    <kbd>←</kbd>/<kbd>→</kbd> prev/next · <kbd>space</kbd> mark done+next · <kbd>s</kbd> skip word.</p>
+  <p class="muted">Load <code>label_review.json</code>. Cuts are <b>polylines</b> — drag the square
+    handles (top/bottom independently for slant, middle for curve). Labels auto-fill from the spelling.
+    <b>Move</b>: drag handle · dbl-click a cut to add a point · <kbd>shift</kbd>+click a handle to delete.
+    <b>+Cut</b>: click to drop a new cut. <b>Eraser</b>: drag to white-out non-letter ink.
+    <kbd>space</kbd> next · <kbd>⏎</kbd> done+next · <kbd>s</kbd> skip · <kbd>←/→</kbd> move.</p>
 
   <div class="row">
     <input type="file" id="file" accept="application/json" />
-    <button id="prev">◀ Prev</button>
-    <button id="next">Next ▶</button>
-    <button id="done">✓ Done + next (space)</button>
-    <button id="skip">Skip (s)</button>
-    <button id="auto">Reset to auto-cuts</button>
-    <button id="export">⬇ Export labels</button>
+    <span class="sep"></span>
+    <button id="tMove" class="on">Move</button>
+    <button id="tCut">+ Cut</button>
+    <button id="tErase">Eraser</button>
+    brush <input type="range" id="brush" min="4" max="40" value="12" style="width:80px">
+    <button id="clearErase">clear erase</button>
+    <button id="auto">reset cuts</button>
   </div>
   <div class="row">
-    <span id="word">—</span>
-    <span id="status" class="muted"></span>
-    <div id="bar"><div id="barfill"></div></div>
-    <span id="progress" class="muted"></span>
+    <button id="prev">◀ Prev</button>
+    <button id="next">Next ▶ (space)</button>
+    <button id="done">✓ Done+next (⏎)</button>
+    <button id="skip">Skip (s)</button>
+    <button id="export">⬇ Export labels</button>
+    <span class="sep"></span>
+    <span id="word">—</span> <span id="status" class="muted"></span>
+    <div id="bar"><div id="barfill"></div></div> <span id="progress" class="muted"></span>
   </div>
-  <canvas id="cv" width="1000" height="300"></canvas>
+  <canvas id="cv" width="1100" height="340"></canvas>
 </div>
 
 <script>
-const PAD = 16, LBLH = 46;          // canvas padding; label strip height under the crop
-let data = null, words = [], i = 0, drag = -1, page = new Image(), base = {};
-const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
-const $ = id => document.getElementById(id);
-const COLORS = ["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
+const PAD = 16, LBLH = 40;
+let data=null, words=[], i=0, page=new Image(), base={};
+let tool="move", drag=null, erasing=false;
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d"), $=id=>document.getElementById(id);
+const COLORS=["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
 
-// crop area transform: the word's page-box drawn into the canvas (above the label strip)
-function view() {
-  const w = words[i], [x0,y0,x1,y1] = w.box;
-  const bw = x1 - x0, bh = y1 - y0;
-  const availW = cv.width - 2*PAD, availH = cv.height - 2*PAD - LBLH;
-  const s = Math.min(availW/bw, availH/bh);
-  const dw = bw*s, dh = bh*s, dx = (cv.width-dw)/2, dy = PAD;
-  return { x0,y0,bw,bh, s, dx,dy,dw,dh,
-           toX: cropx => dx + (cropx/bw)*dw,        // crop-local px -> canvas x
-           fromX: px => (px-dx)/dw*bw };            // canvas x -> crop-local px
-}
+function view(){ const w=words[i],[x0,y0,x1,y1]=w.box,bw=x1-x0,bh=y1-y0;
+  const aW=cv.width-2*PAD, aH=cv.height-2*PAD-LBLH, s=Math.min(aW/bw,aH/bh);
+  const dw=bw*s,dh=bh*s,dx=(cv.width-dw)/2,dy=PAD;
+  return {bw,bh,dx,dy,dw,dh,box:w.box,
+    toX:cx=>dx+cx/bw*dw, toY:cy=>dy+cy/bh*dh,
+    fromX:px=>(px-dx)/dw*bw, fromY:py=>(py-dy)/dh*bh}; }
 
-function draw() {
-  ctx.clearRect(0,0,cv.width,cv.height);
-  if (!words.length) return;
-  const w = words[i], T = view();
-  ctx.drawImage(page, w.box[0],w.box[1],T.bw,T.bh, T.dx,T.dy,T.dw,T.dh);   // the crop
+// boundaries: left edge, the cut polylines (sorted by y), right edge -> L slices
+function boundaries(w){ const bh=w.box[3]-w.box[1], bw=w.box[2]-w.box[0];
+  const srt=c=>c.slice().sort((a,b)=>a[1]-b[1]);
+  return [[[0,0],[0,bh]], ...w.cuts.map(srt), [[bw,0],[bw,bh]]]; }
+
+function draw(){ ctx.clearRect(0,0,cv.width,cv.height); if(!words.length) return;
+  const w=words[i], T=view();
+  ctx.drawImage(page, w.box[0],w.box[1],T.bw,T.bh, T.dx,T.dy,T.dw,T.dh);
   ctx.strokeStyle="#ddd"; ctx.strokeRect(T.dx,T.dy,T.dw,T.dh);
-  const cuts = (w.cuts||[]).slice().sort((a,b)=>a-b);
-  const edges = [0, ...cuts, T.bw];                    // L slices between L-1 cuts
-  // colour each slice + its auto-label
-  for (let k=0; k<edges.length-1; k++) {
-    const ax=T.toX(edges[k]), bx=T.toX(edges[k+1]);
-    ctx.fillStyle = COLORS[k%10]+"22"; ctx.fillRect(ax,T.dy,bx-ax,T.dh);
-    const ch = w.text[k];
-    if (ch !== undefined) {
-      ctx.fillStyle = COLORS[k%10]; ctx.font="22px sans-serif"; ctx.textAlign="center";
-      ctx.fillText(ch, (ax+bx)/2, T.dy+T.dh+30);
-    }
-  }
-  ctx.strokeStyle="#d00"; ctx.lineWidth=2;             // cut handles
-  for (const c of cuts) { const X=T.toX(c); ctx.beginPath(); ctx.moveTo(X,T.dy-6); ctx.lineTo(X,T.dy+T.dh+6); ctx.stroke(); ctx.fillStyle="#d00"; ctx.fillRect(X-4,T.dy-6,8,8); }
-  const need=w.text.length-1, have=cuts.length;
-  $("word").textContent = `"${w.text}"` + (w.skip ? "  (skipped)" : "");
-  $("status").innerHTML = have===need ? `<span class="ok">${have}/${need} cuts ✓</span>` : `<span class="bad">${have}/${need} cuts</span>`;
-  const done = words.filter(x=>x.done||x.skip).length;
-  $("progress").textContent = `${i+1}/${words.length} · ${done} done`;
-  $("barfill").style.width = (100*done/words.length)+"%";
-}
+  const bnds=boundaries(w);
+  for(let k=0;k<bnds.length-1;k++){                       // colour each slice as a polygon
+    const a=bnds[k], b=bnds[k+1]; ctx.beginPath();
+    a.forEach((p,j)=>{const X=T.toX(p[0]),Y=T.toY(p[1]); j?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});
+    for(let j=b.length-1;j>=0;j--) ctx.lineTo(T.toX(b[j][0]),T.toY(b[j][1]));
+    ctx.closePath(); ctx.fillStyle=COLORS[k%10]+"22"; ctx.fill();
+    const ch=w.text[k];
+    if(ch!==undefined){ const mid=(a[a.length>>1][0]+b[b.length>>1][0])/2;
+      ctx.fillStyle=COLORS[k%10]; ctx.font="22px sans-serif"; ctx.textAlign="center";
+      ctx.fillText(ch, T.toX(mid), T.dy+T.dh+28); } }
+  ctx.strokeStyle="#d00"; ctx.lineWidth=2;                // cut polylines + handles
+  for(const c of w.cuts){ const s=c.slice().sort((a,b)=>a[1]-b[1]);
+    ctx.beginPath(); s.forEach((p,j)=>{const X=T.toX(p[0]),Y=T.toY(p[1]); j?ctx.lineTo(X,Y):ctx.moveTo(X,Y);}); ctx.stroke();
+    ctx.fillStyle="#d00"; for(const p of s){ ctx.fillRect(T.toX(p[0])-4,T.toY(p[1])-4,8,8); } }
+  ctx.fillStyle="rgba(255,255,255,0.75)";                 // eraser preview
+  for(const d of (w.erase||[])){ ctx.beginPath(); ctx.arc(T.toX(d[0]),T.toY(d[1]),d[2]*T.dw/T.bw,0,7); ctx.fill(); }
+  const need=w.text.length-1, have=w.cuts.length;
+  $("word").textContent=`"${w.text}"`+(w.skip?" (skipped)":"");
+  $("status").innerHTML=have===need?`<span class="ok">${have}/${need} cuts ✓</span>`:`<span class="bad">${have}/${need} cuts</span>`;
+  const dn=words.filter(x=>x.done||x.skip).length;
+  $("progress").textContent=`${i+1}/${words.length} · ${dn} done`; $("barfill").style.width=(100*dn/words.length)+"%"; }
 
-function nearest(px){ const T=view(); let best=-1,bd=9; (words[i].cuts||[]).forEach((c,k)=>{const d=Math.abs(T.toX(c)-px); if(d<bd){bd=d;best=k;}}); return best; }
-function mx(e){ return e.offsetX * (cv.width/cv.getBoundingClientRect().width); }
-function my(e){ return e.offsetY * (cv.height/cv.getBoundingClientRect().height); }
+function mx(e){return e.offsetX*(cv.width/cv.getBoundingClientRect().width);}
+function my(e){return e.offsetY*(cv.height/cv.getBoundingClientRect().height);}
+// nearest control point: {ci,pi,dist} in canvas px
+function nearestPoint(px,py){ const T=view(); let best=null;
+  words[i].cuts.forEach((c,ci)=>c.forEach((p,pi)=>{const d=Math.hypot(T.toX(p[0])-px,T.toY(p[1])-py); if(!best||d<best.d) best={ci,pi,d};}));
+  return best; }
+// nearest cut polyline (segment distance), for adding a point
+function nearestCut(px,py){ const T=view(); let best=null;
+  words[i].cuts.forEach((c,ci)=>{const s=c.slice().sort((a,b)=>a[1]-b[1]);
+    for(let j=0;j<s.length-1;j++){ const d=segDist(px,py,T.toX(s[j][0]),T.toY(s[j][1]),T.toX(s[j+1][0]),T.toY(s[j+1][1])); if(!best||d<best.d) best={ci,d}; }});
+  return best; }
+function segDist(px,py,ax,ay,bx,by){ const dx=bx-ax,dy=by-ay,L=dx*dx+dy*dy||1;
+  let t=((px-ax)*dx+(py-ay)*dy)/L; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(ax+t*dx),py-(ay+t*dy)); }
 
-cv.addEventListener("mousedown", e=>{ if(!words.length) return; const k=nearest(mx(e));
-  if(e.shiftKey && k>=0){ words[i].cuts.splice(k,1); draw(); return; } drag=k; });
-cv.addEventListener("mousemove", e=>{ if(drag<0) return; words[i].cuts[drag]=Math.max(0,Math.min(view().bw, view().fromX(mx(e)))); draw(); });
-window.addEventListener("mouseup", ()=>{ if(drag>=0){ words[i].cuts.sort((a,b)=>a-b); drag=-1; draw(); } });
-cv.addEventListener("dblclick", e=>{ if(!words.length) return; const T=view();
-  if(my(e)>T.dy-8 && my(e)<T.dy+T.dh+8){ words[i].cuts.push(T.fromX(mx(e))); words[i].cuts.sort((a,b)=>a-b); draw(); } });
+cv.addEventListener("mousedown",e=>{ if(!words.length) return; const T=view(), X=mx(e), Y=my(e);
+  if(tool==="erase"){ erasing=true; addDab(X,Y); return; }
+  if(tool==="cut"){ words[i].cuts.push([[T.fromX(X),0],[T.fromX(X),T.bh]]); draw(); return; }
+  const np=nearestPoint(X,Y);                               // move tool
+  if(np && np.d<10){ if(e.shiftKey){ const c=words[i].cuts[np.ci]; c.splice(np.pi,1); if(c.length<2) words[i].cuts.splice(np.ci,1); draw(); } else drag=np; } });
+cv.addEventListener("mousemove",e=>{ const T=view(),X=mx(e),Y=my(e);
+  if(erasing){ addDab(X,Y); return; }
+  if(drag){ const p=words[i].cuts[drag.ci][drag.pi]; p[0]=Math.max(0,Math.min(T.bw,T.fromX(X))); p[1]=Math.max(0,Math.min(T.bh,T.fromY(Y))); draw(); } });
+window.addEventListener("mouseup",()=>{ if(drag){ words[i].cuts[drag.ci].sort((a,b)=>a[1]-b[1]); drag=null; } erasing=false; });
+cv.addEventListener("dblclick",e=>{ if(!words.length||tool!=="move") return; const T=view(),X=mx(e),Y=my(e);
+  const nc=nearestCut(X,Y); if(nc&&nc.d<12){ words[i].cuts[nc.ci].push([T.fromX(X),T.fromY(Y)]); words[i].cuts[nc.ci].sort((a,b)=>a[1]-b[1]); draw(); } });
+function addDab(X,Y){ const T=view(); const r=+$("brush").value;
+  words[i].erase=words[i].erase||[]; words[i].erase.push([T.fromX(X),T.fromY(Y),r*T.bw/T.dw]); draw(); }
 
+function setTool(t){ tool=t; for(const[id,n] of [["tMove","move"],["tCut","cut"],["tErase","erase"]]) $(id).classList.toggle("on",n===t);
+  cv.style.cursor=t==="erase"?"cell":t==="cut"?"copy":"crosshair"; }
+$("tMove").onclick=()=>setTool("move"); $("tCut").onclick=()=>setTool("cut"); $("tErase").onclick=()=>setTool("erase");
+$("clearErase").onclick=()=>{ if(words.length){words[i].erase=[];draw();} };
 function go(d){ i=Math.max(0,Math.min(words.length-1,i+d)); draw(); }
 $("prev").onclick=()=>go(-1); $("next").onclick=()=>go(1);
-$("done").onclick=()=>{ if(words.length){ words[i].done=true; words[i].skip=false; go(1);} };
-$("skip").onclick=()=>{ if(words.length){ words[i].skip=true; go(1);} };
-$("auto").onclick=()=>{ if(words.length){ words[i].cuts=(base[i]||[]).slice(); draw(); } };
-$("export").onclick=()=>{
-  const out = words.filter(w=>!w.skip).map(w=>({text:w.text, box:w.box, cuts:w.cuts, done:!!w.done}));
-  const blob=new Blob([JSON.stringify(out)],{type:"application/json"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="labels_corrected.json"; a.click();
-};
-$("file").addEventListener("change", e=>{ const f=e.target.files[0]; if(!f) return; const r=new FileReader();
-  r.onload=()=>{ data=JSON.parse(r.result); words=data.words; words.forEach((w,k)=>base[k]=(w.cuts||[]).slice());
-    page=new Image(); page.onload=()=>{ i=0; draw(); }; page.src=data.page; };
+$("done").onclick=()=>{ if(words.length){words[i].done=true;words[i].skip=false;go(1);} };
+$("skip").onclick=()=>{ if(words.length){words[i].skip=true;go(1);} };
+$("auto").onclick=()=>{ if(words.length){words[i].cuts=JSON.parse(JSON.stringify(base[i]||[]));words[i].erase=[];draw();} };
+$("export").onclick=()=>{ const out=words.filter(w=>!w.skip).map(w=>({text:w.text,box:w.box,cuts:w.cuts,erase:w.erase||[],done:!!w.done}));
+  const b=new Blob([JSON.stringify(out)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="labels_corrected.json"; a.click(); };
+$("file").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
+  r.onload=()=>{ data=JSON.parse(r.result); words=data.words; words.forEach((w,k)=>{ if(typeof (w.cuts[0])==="number") w.cuts=w.cuts.map(x=>[[x,0],[x,w.box[3]-w.box[1]]]); base[k]=JSON.parse(JSON.stringify(w.cuts)); w.erase=w.erase||[]; });
+    page=new Image(); page.onload=()=>{i=0;draw();}; page.src=data.page; };
   r.readAsText(f); });
-window.addEventListener("keydown", e=>{
-  if(e.key==="ArrowRight") $("next").click(); else if(e.key==="ArrowLeft") $("prev").click();
-  else if(e.key===" "){ e.preventDefault(); $("done").click(); } else if(e.key==="s") $("skip").click();
-});
+window.addEventListener("keydown",e=>{ if(!words.length)return;
+  if(e.key===" "){e.preventDefault();$("next").click();} else if(e.key==="Enter"){e.preventDefault();$("done").click();}
+  else if(e.key==="s")$("skip").click(); else if(e.key==="ArrowRight")$("next").click(); else if(e.key==="ArrowLeft")$("prev").click();
+  else if(e.key==="m")setTool("move"); else if(e.key==="c")setTool("cut"); else if(e.key==="e")setTool("erase"); });
 draw();
 </script>
 </body>

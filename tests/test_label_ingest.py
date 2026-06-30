@@ -1,23 +1,43 @@
-"""Tests for verified-label ingest (pure box-splitting logic)."""
+"""Tests for verified-label ingest: polyline polygon split + eraser."""
 
-from ocr.experiments.label_ingest import letter_boxes
+import numpy as np
+
+from ocr.experiments.label_ingest import ingest, letter_polys
 
 
-def test_letter_boxes_splits_and_labels():
-    # box x 100..200 (width 100), one cut at crop-local 40 -> 'a' [100..140], 'b' [140..200]
-    out = letter_boxes([100, 0, 200, 50], [40], "ab")
+def test_letter_polys_splits_and_labels():
+    out = letter_polys([100, 0, 200, 50], [[[40, 0], [40, 50]]], "ab")
     assert [c for c, _ in out] == ["a", "b"]
-    assert out[0][1] == [100, 0, 140, 50]
-    assert out[1][1] == [140, 0, 200, 50]
+    ax = [p[0] for p in out[0][1]]
+    assert min(ax) == 100 and max(ax) == 140  # 'a' between left edge and the cut
+    bx = [p[0] for p in out[1][1]]
+    assert min(bx) == 140 and max(bx) == 200  # 'b' between the cut and right edge
 
 
-def test_letter_boxes_caps_at_text_length():
-    # 3 cuts -> 4 slices but only 2 letters -> 2 boxes
-    out = letter_boxes([0, 0, 100, 20], [25, 50, 75], "ab")
-    assert len(out) == 2
+def test_letter_polys_caps_at_text_length():
+    cuts = [[[25, 0], [25, 20]], [[50, 0], [50, 20]], [[75, 0], [75, 20]]]
+    assert len(letter_polys([0, 0, 100, 20], cuts, "ab")) == 2
 
 
-def test_letter_boxes_drops_slivers():
-    # a cut 1px from the edge -> first slice <2px is dropped
-    out = letter_boxes([0, 0, 100, 20], [1], "ab")
-    assert all(b[2] - b[0] >= 2 for _, b in out)
+def test_letter_polys_respects_slanted_cut():
+    # cut slanted: top at x=40, bottom at x=60 -> the boundary polygon carries both
+    out = letter_polys([0, 0, 100, 50], [[[40, 0], [60, 50]]], "ab")
+    ax = [p[0] for p in out[0][1]]
+    assert 40 in ax and 60 in ax
+
+
+def test_ingest_masks_polygon_and_applies_eraser():
+    page = np.full((40, 140, 3), 100, np.uint8)  # uniform gray "page"
+    corrected = [
+        {
+            "text": "ab",
+            "box": [10, 5, 110, 25],
+            "cuts": [[[50, 0], [50, 20]]],
+            "erase": [[20, 10, 6]],
+        }
+    ]
+    letters = ingest(corrected, page)
+    assert [c for c, _ in letters] == ["a", "b"]
+    a_crop = letters[0][1]
+    assert (a_crop == 255).any()  # eraser dab whited out part of 'a'
+    assert (a_crop == 100).any()  # but ink/paper elsewhere kept

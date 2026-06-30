@@ -14,26 +14,52 @@ import json
 import os
 
 
-def letter_boxes(box, cuts, text):
-    """Per-letter (char, [x0,y0,x1,y1] page px) by splitting ``box`` at crop-local ``cuts``."""
-    x0, y0, x1, y1 = box
-    edges = [0.0, *sorted(cuts), float(x1 - x0)]
+def _boundaries(box, cuts):
+    """left edge, the cut polylines (sorted top->bottom), right edge -- in crop-local coords."""
+    bw, bh = box[2] - box[0], box[3] - box[1]
+    polys = [sorted(c, key=lambda p: p[1]) for c in cuts]
+    return [[[0, 0], [0, bh]], *polys, [[bw, 0], [bw, bh]]]
+
+
+def letter_polys(box, cuts, text):
+    """Per-letter ``(char, polygon[[x,y]...] page px)`` between consecutive boundary polylines.
+
+    Cuts are polylines (slanted/curved), so each letter is a polygon, not a rectangle."""
+    x0, y0 = box[0], box[1]
+    bnds = _boundaries(box, cuts)
     out = []
-    for k in range(len(edges) - 1):
+    for k in range(len(bnds) - 1):
         if k >= len(text):
             break
-        lx0, lx1 = x0 + edges[k], x0 + edges[k + 1]
-        if lx1 - lx0 >= 2:
-            out.append((text[k], [int(lx0), int(y0), int(lx1), int(y1)]))
+        a, b = bnds[k], bnds[k + 1]
+        poly = [[x0 + px, y0 + py] for px, py in a] + [[x0 + px, y0 + py] for px, py in reversed(b)]
+        out.append((text[k], poly))
     return out
 
 
 def ingest(corrected, page_rgb):
-    """List of ``(char, letter_crop_ndarray)`` from corrected words + the page image."""
+    """List of ``(char, letter_crop_ndarray)`` — each letter masked to its polygon, with the
+    word's eraser dabs whited out. From corrected words + the page image."""
+    import cv2
+    import numpy as np
+
     letters = []
     for w in corrected:
-        for ch, (lx0, ly0, lx1, ly1) in letter_boxes(w["box"], w["cuts"], w["text"]):
-            letters.append((ch, page_rgb[ly0:ly1, lx0:lx1]))
+        erase = w.get("erase", [])
+        ox, oy = w["box"][0], w["box"][1]
+        for ch, poly in letter_polys(w["box"], w["cuts"], w["text"]):
+            pts = np.array(poly, np.int32)
+            bx0, bx1 = pts[:, 0].min(), pts[:, 0].max()
+            by0, by1 = pts[:, 1].min(), pts[:, 1].max()
+            if bx1 - bx0 < 2 or by1 - by0 < 2:
+                continue
+            sub = page_rgb[by0:by1, bx0:bx1].copy()
+            mask = np.zeros(sub.shape[:2], np.uint8)
+            cv2.fillPoly(mask, [pts - [bx0, by0]], 255)
+            for ex, ey, er in erase:  # erase dabs (crop-local -> sub-crop coords)
+                cv2.circle(mask, (int(ox + ex - bx0), int(oy + ey - by0)), int(er), 0, -1)
+            sub[mask == 0] = 255  # whiten outside the polygon + erased ink
+            letters.append((ch, sub))
     return letters
 
 
