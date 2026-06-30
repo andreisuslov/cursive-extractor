@@ -9,6 +9,17 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-30 — CRAFT v4: real-domain weak-supervision sharpens the peaks
+
+Synthetic-only v3 transferred to real ink but peaks were broad/merged (over-segmented). Weak-sup
+(`craft_weaksup.py`): ran v3 on all page-1 words, kept the **25 confident ones** (fired ~L
+separated peaks), turned those into tight pseudo-GT, fine-tuned on a 50/50 synth+real mix. Result
+(v4, now the default): peaks are **visibly crisper and separated**, counts much closer to the true
+letter counts — Isabel 2→6 (exact), John 1→4 (exact), Hill 2→3, girls 2→4 — and the previously-faint
+"John" now cuts from the model rather than the prior. Honest limits: very faint words (became) still
+lean on the width-prior backfill; only 1 page of weak-sup so far. Consolidated into the repo
+(`craft_weaksup.py`); weights gitignored, reproducible.
+
 ## 2026-06-30 — CRAFT letter cutter: the breakthrough on cutting (+ consolidated into repo)
 
 Connected-cursive letter cutting — unsolved for the whole project (geometry, recognizer gates,

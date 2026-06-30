@@ -28,13 +28,16 @@ labels), it transfers to real diary ink and localizes individual letters. Full s
 - `_craft_model/` — vendored CRAFT model (clovaai, MIT), patched for modern torchvision.
 - `craft_train.py` — reproduces the weights: synthetic cursive + region/affinity GT, diary-style
   augmentation + CLAHE (closes the synthetic→real gap), OHEM loss (crisp peaks). CPU, ~20-40 min.
+- `craft_weaksup.py` — real-domain weak-supervision: pseudo-label confident real words (model fired
+  ~L separated peaks), fine-tune on synth+real → sharper, separated peaks (**v4**, the default).
 - `craft_segmenter.py` — `CraftSegmenter().cut_word(crop_rgb, text)` → exactly `len(text)-1` cuts
   (model peaks where confident, width-prior backfill where faint). Extraction is pure numpy/cv2 and
   unit-tested; torch is lazy-loaded only for inference.
 
-**Status:** fires per-letter on every tested word (v3); clean words cut genuinely per-letter, faint
-words fall back to the width prior. Next: real-domain weak-supervision (label real words from these
-peaks) to sharpen the faint cases.
+**Status (v4, after weak-supervision):** fires per-letter on every tested word with crisp, separated
+peaks — peak counts close to the true letter counts (Isabel 6/6, John 4/4), cuts land roughly
+per-letter on clear words; faint words still lean on the width prior. Next: more pages of
+weak-supervision + sharper peak→box (affinity-aware) extraction.
 
 **Setup (not committed — weights are large):**
 ```bash
@@ -42,7 +45,8 @@ pip install torch torchvision            # ~CPU build is fine
 mkdir -p ocr/experiments/craft_weights   # base CRAFT weights (MIT, from EasyOCR's release):
 curl -sSL https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip -o /tmp/c.zip
 unzip -o /tmp/c.zip -d ocr/experiments/craft_weights/
-python -m ocr.experiments.craft_train    # -> craft_weights/craft_finetuned_v3.pth
+python -m ocr.experiments.craft_train     # synthetic -> craft_weights/craft_finetuned_v3.pth
+python -m ocr.experiments.craft_weaksup --page-dir outputs/<pdf>/page_001  # -> ..._v4.pth (default)
 ```
 
 ## The one blocker

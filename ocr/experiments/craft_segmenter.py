@@ -24,7 +24,7 @@ CW, CH = 384, 96  # model input canvas (must stay /32-divisible)
 _MEAN = np.array([0.485 * 255, 0.456 * 255, 0.406 * 255], np.float32)
 _STD = np.array([0.229 * 255, 0.224 * 255, 0.225 * 255], np.float32)
 _clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-DEFAULT_WEIGHTS = os.path.join(os.path.dirname(__file__), "craft_weights", "craft_finetuned_v3.pth")
+DEFAULT_WEIGHTS = os.path.join(os.path.dirname(__file__), "craft_weights", "craft_finetuned_v4.pth")
 
 
 def fit_to_canvas(crop_rgb: np.ndarray):
