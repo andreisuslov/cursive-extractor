@@ -45,6 +45,24 @@ def test_ingest_eraser_fills_with_paper_colour():
     assert (a_crop == 200).any()  # filled with the paper colour (not flat white)
 
 
+def test_ingest_eraser_page_coords_when_flagged():
+    page = np.full((40, 140, 3), 200, np.uint8)
+    page[12:18, 30:42] = 30  # ink blob at page x 30..42 (inside word box x0=10)
+    doc = {
+        "eraseSpace": "page",
+        "words": [
+            {
+                "text": "ab",
+                "box": [10, 5, 110, 25],
+                "cuts": [[[60, 0], [60, 20]]],
+                "erase": [[36, 15, 8]],
+            }
+        ],
+    }
+    a_crop = ingest(doc, page)[0][1]  # page-coord dab (36,15) lands on the blob inside 'a'
+    assert not (a_crop == 30).any() and (a_crop == 200).any()
+
+
 def test_ingest_accepts_dict_doc_and_skips_skipped_words():
     page = np.full((40, 140, 3), 200, np.uint8)
     doc = {

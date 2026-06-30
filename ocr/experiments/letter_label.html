@@ -92,8 +92,10 @@ function paperColor(w){ if(w.paper) return w.paper;
 function draw(){ ctx.clearRect(0,0,cv.width,cv.height); if(!words.length) return;
   const w=words[i], T=view();
   ctx.drawImage(page, w.box[0],w.box[1],T.bw,T.bh, T.dx,T.dy,T.dw,T.dh);
-  ctx.fillStyle="rgb("+paperColor(w).join(",")+")";              // eraser: paper-colour dabs over ink
-  for(const d of (w.erase||[])){ ctx.beginPath(); ctx.arc(T.toX(d[0]),T.toY(d[1]),d[2]*T.dw/T.bw,0,7); ctx.fill(); }
+  ctx.save(); ctx.beginPath(); ctx.rect(T.dx,T.dy,T.dw,T.dh); ctx.clip();   // keep eraser inside the working area
+  ctx.fillStyle="rgb("+paperColor(w).join(",")+")";                          // dabs are page-coords (attached to image)
+  for(const d of (w.erase||[])){ ctx.beginPath(); ctx.arc(T.toX(d[0]-w.box[0]),T.toY(d[1]-w.box[1]),d[2]*T.dw/T.bw,0,7); ctx.fill(); }
+  ctx.restore();
   ctx.strokeStyle="#ddd"; ctx.strokeRect(T.dx,T.dy,T.dw,T.dh);
   const bnds=boundaries(w);
   for(let k=0;k<bnds.length-1;k++){                              // colour each slice + auto-label
@@ -133,7 +135,7 @@ function undo(){ if(!undoStack.length)return; redoStack.push(snap()); applySnap(
 function redo(){ if(!redoStack.length)return; undoStack.push(snap()); applySnap(redoStack.pop()); }
 // auto-save per-word progress (cuts/erase/box/done) to localStorage so reloads don't lose work
 function scheduleSave(){ if(!sig) return; clearTimeout(saveT); saveT=setTimeout(()=>{ try{
-  localStorage.setItem(sig, JSON.stringify(words.map(w=>({text:w.text,box:w.box,cuts:w.cuts,erase:w.erase||[],done:!!w.done,skip:!!w.skip})))); }catch(_e){} }, 500); }
+  localStorage.setItem(sig, JSON.stringify({eraseSpace:"page", words:words.map(w=>({text:w.text,box:w.box,cuts:w.cuts,erase:w.erase||[],done:!!w.done,skip:!!w.skip}))})); }catch(_e){} }, 500); }
 
 cv.addEventListener("mousedown",e=>{ if(!words.length||e.button!==0||e.ctrlKey) return; const T=view(),X=mx(e),Y=my(e);
   if(tool==="erase"){ pushUndo(); erasing=true; addDab(X,Y); return; }
@@ -164,7 +166,7 @@ cv.addEventListener("contextmenu",e=>{ e.preventDefault(); if(!words.length) ret
   if(nc&&nc.d<14){ pushUndo(); words[i].cuts.splice(nc.ci,1); }
   else { pushUndo(); words[i].cuts.push([[T.fromX(X),0],[T.fromX(X),T.bh]]); }
   draw(); });
-function addDab(X,Y){ const T=view(),r=+$("brush").value; (words[i].erase=words[i].erase||[]).push([T.fromX(X),T.fromY(Y),r*T.bw/T.dw]); draw(); }
+function addDab(X,Y){ const T=view(),r=+$("brush").value,w=words[i]; (w.erase=w.erase||[]).push([w.box[0]+T.fromX(X),w.box[1]+T.fromY(Y),r*T.bw/T.dw]); draw(); }
 // ⌘/ctrl + scroll (or trackpad pinch) = zoom the frame toward the cursor (resize the box, keeping
 // the page point under the cursor fixed). Scroll up / pinch-out = closer; down / pinch-in = farther.
 cv.addEventListener("wheel",e=>{ if(!words.length||!(e.metaKey||e.ctrlKey)) return; e.preventDefault();
@@ -192,7 +194,7 @@ $("prev").onclick=()=>go(-1); $("next").onclick=()=>go(1);
 $("done").onclick=()=>{ if(words.length){words[i].done=true;words[i].skip=false;go(1);} };
 $("skip").onclick=()=>{ if(words.length){words[i].skip=true;go(1);} };
 $("export").onclick=()=>{ if(!pageURL){ alert("Load a page (label_review.json / resume.json) before exporting."); return; }
-  const out={page:pageURL, words: words.map(w=>({text:w.text,box:w.box,cuts:w.cuts.slice().sort((a,b)=>cutX(a)-cutX(b)),erase:w.erase||[],done:!!w.done,skip:!!w.skip}))};
+  const out={page:pageURL, eraseSpace:"page", words: words.map(w=>({text:w.text,box:w.box,cuts:w.cuts.slice().sort((a,b)=>cutX(a)-cutX(b)),erase:w.erase||[],done:!!w.done,skip:!!w.skip}))};
   const b=new Blob([JSON.stringify(out)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="labels_corrected.json"; a.click(); };
 // edit the recognized word (e.g. "load" -> "had"); labels + cut-count update live
 $("wtext").addEventListener("focus",()=>{ if(words.length) pushUndo(); });
@@ -204,11 +206,16 @@ function applyEdits(saved){ let j=0,n=0;
   return n; }
 function loadDoc(data){                                  // {page, words}: fresh review OR self-contained export
   pageURL=data.page; words=data.words; undoStack=[]; redoStack=[]; i=0;
-  words.forEach((w,k)=>{ if(typeof (w.cuts[0])==="number") w.cuts=w.cuts.map(x=>[[x,0],[x,w.box[3]-w.box[1]]]); base[k]=clone(w.cuts); w.erase=w.erase||[]; });
+  // convert legacy crop-local eraser dabs -> page-coords (so they stay attached to the image)
+  const toPage=(w,er)=>(er||[]).map(d=>[w.box[0]+d[0], w.box[1]+d[1], d[2]]);
+  words.forEach((w,k)=>{ if(typeof (w.cuts[0])==="number") w.cuts=w.cuts.map(x=>[[x,0],[x,w.box[3]-w.box[1]]]); base[k]=clone(w.cuts);
+    w.erase = data.eraseSpace==="page" ? (w.erase||[]) : toPage(w, w.erase); });
   sig="ll:"+words.length+":"+(pageURL?pageURL.length:0);   // keyed on the page image (stable across text/box edits)
-  try{ const sv=localStorage.getItem(sig); if(sv){ const arr=JSON.parse(sv);
+  try{ const sv=localStorage.getItem(sig); if(sv){ let parsed=JSON.parse(sv);
+    const arr = Array.isArray(parsed) ? parsed : parsed.words, svPage = !Array.isArray(parsed) && parsed.eraseSpace==="page";
     if(arr.length===words.length && confirm("This browser has auto-saved progress for this page. Restore it?"))
-      arr.forEach((s,k)=>{ if(s.text!=null)words[k].text=s.text; if(s.cuts)words[k].cuts=clone(s.cuts); words[k].erase=clone(s.erase||[]); words[k].done=!!s.done; words[k].skip=!!s.skip; if(s.box)words[k].box=clone(s.box); }); } }catch(_e){}
+      arr.forEach((s,k)=>{ if(s.text!=null)words[k].text=s.text; if(s.cuts)words[k].cuts=clone(s.cuts); words[k].done=!!s.done; words[k].skip=!!s.skip; if(s.box)words[k].box=clone(s.box);
+        words[k].erase = svPage ? clone(s.erase||[]) : toPage(words[k], s.erase); }); } }catch(_e){}
   page=new Image(); page.onload=()=>{i=0;draw();}; page.src=pageURL; }
 // one loader for everything: a full {page,words} doc, or a legacy page-less edits array
 $("file").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return; const r=new FileReader();

@@ -44,6 +44,9 @@ def ingest(corrected, page_rgb):
     import numpy as np
 
     words = corrected["words"] if isinstance(corrected, dict) else corrected
+    abs_dabs = (
+        isinstance(corrected, dict) and corrected.get("eraseSpace") == "page"
+    )  # else crop-local (legacy)
     letters = []
     for w in words:
         if w.get("skip"):
@@ -61,8 +64,10 @@ def ingest(corrected, page_rgb):
             sub = src[by0:by1, bx0:bx1].copy()
             mask = np.zeros(sub.shape[:2], np.uint8)
             cv2.fillPoly(mask, [pts - [bx0, by0]], 255)
-            for ex, ey, er in w.get("erase", []):  # eraser dabs are crop-local
-                cv2.circle(mask, (int(ex - bx0), int(ey - by0)), int(er), 0, -1)
+            for ex, ey, er in w.get("erase", []):  # page-coords (new) or crop-local (legacy)
+                cx = ex - x0 - bx0 if abs_dabs else ex - bx0
+                cy = ey - y0 - by0 if abs_dabs else ey - by0
+                cv2.circle(mask, (int(cx), int(cy)), int(er), 0, -1)
             sub[mask == 0] = paper  # fill outside-polygon + erased ink with paper colour
             letters.append((ch, sub))
     return letters

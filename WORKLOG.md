@@ -9,6 +9,16 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-06-30 — labeller eraser: clip to working area + attach dabs to the image
+
+Two eraser fixes. (1) **Clip** the paper-colour dabs to the crop rect in `draw()` so they no longer
+spill outside the working area. (2) **Anchor dabs to the page, not the frame**: store eraser dabs in
+PAGE coordinates (was crop-local), so zoom/pan keeps each patch on the same ink. Added an
+`eraseSpace:"page"` flag to exports + localStorage; legacy crop-local dabs (existing resume.json /
+old saves) auto-migrate to page-coords on load (using each word's box). `label_ingest` reads the
+flag and maps page→crop accordingly (falls back to crop-local for legacy/flagless files). Tests
+cover both coordinate spaces.
+
 ## 2026-06-30 — labeller: zoom, editable word text, robust load-from-anywhere
 
 - **⌘/ctrl+scroll & trackpad pinch zoom** the frame toward the cursor (cursor-anchored box resize),
