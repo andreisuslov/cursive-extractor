@@ -203,3 +203,32 @@ The standalone `datasets/content/*.py` scripts were adapted into this package:
   a 404). Detection runs at **`temperature=0`** — at the default temperature the
   models intermittently return degenerate OCR (mostly punctuation) on a dense
   page; responses are parsed tolerantly (`gemini_ocr.parse_word_boxes`).
+
+## Corpus derender run
+
+Full-corpus InkSight derendering on a rented GPU, preceded by a cheap label screen, then
+stroke-space QA, then dataset assembly. **Screen first** (`ocr.screen_crops`): Gemini reads
+each word crop and keeps it only if the read matches its label (mismatched boxes are
+relabeled to the transcript token they actually landed on, or dropped). This runs before
+the pod because derendering costs ~5 s/word on a billed GPU — dropped junk never reaches
+it, so the runner's word-count/cost estimate (and the run itself) shrinks accordingly; the
+surviving `<prefix>_boxes_screened.json` is preferred automatically over
+`boxes_refined.json` and the canonical boxes by both the runner and
+`ocr.inksight_vectorize`. The runner (`scripts/runpod_inksight_corpus.sh`) is
+worklist-driven: generate the list, edit/split it if you want, and run it (the pod is
+created only after a printed word-count/cost estimate and an explicit `--yes`; finished
+pages are pulled immediately and re-runs resume). QA (`ocr.ink_qa`) removes contamination
+in stroke space (clips strokes to the word's box region, drops ruled-line strokes) and
+scores trace fidelity (AIoU-F1) into `metadata.qa`; the dataset build then keeps only words
+at or above the QA threshold (`--require-label-ok` additionally drops words that failed the
+`ocr.verify_labels` read-back).
+
+```bash
+scripts/runpod_inksight_corpus.sh --print-worklist > worklist.tsv
+while IFS=$'\t' read -r pdf page; do
+  envchain gemini python3 -m ocr.screen_crops --pdf "$pdf" --page "$page"
+done < worklist.tsv
+scripts/runpod_inksight_corpus.sh --worklist worklist.tsv --yes   # [--shard I/N] for parallel pods
+while IFS=$'\t' read -r pdf page; do python3 -m ocr.ink_qa --pdf "$pdf" --page "$page"; done < worklist.tsv
+python3 datasets/build_diarybank.py --name diarybank_qa --strokes-suffix strokes_qa.json --min-qa 0.85
+```

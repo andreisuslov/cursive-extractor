@@ -271,7 +271,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Vectorize OCR boxes with InkSight derendering")
     p.add_argument("--pdf", default=config.PDF_PATH, help="Source PDF")
     p.add_argument("--page", type=int, default=1, help="Page number, 1-based")
-    p.add_argument("--boxes", default=None, help="Boxes JSON (default: canonical for --pdf/--page)")
+    p.add_argument(
+        "--boxes",
+        default=None,
+        help="Boxes JSON (default: *_boxes_screened.json > boxes_refined.json > canonical)",
+    )
     p.add_argument("--output", default=None, help="Output strokes.json (default: canonical path)")
     p.add_argument("--output-root", default=paths.OUTPUT_ROOT, help="Root output folder")
     p.add_argument("--version", type=int, default=None, help="Page version (default: latest)")
@@ -289,6 +293,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=config.CROP_CLEAN,
         help="Skip ruled-line/band/neighbour cleaning (clean_word) before derendering",
     )
+    p.add_argument(
+        "--prefer-refined",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use <page_dir>/boxes_refined.json (ocr.refine_boxes) when present",
+    )
     return p.parse_args(argv)
 
 
@@ -302,7 +312,18 @@ def main(argv: list[str] | None = None) -> None:
     )
     if version is None and not args.boxes:
         raise SystemExit("No processed version found; run ocr.extract_boxes first or pass --boxes.")
+    # Boxes source preference: explicit --boxes > screened > refined > canonical.
+    # Screened boxes (ocr.screen_crops) already dropped/relabeled label/ink mismatches,
+    # so they win over refined; any per-entry "screen" dict passes through untouched.
     boxes_path = args.boxes or paths.boxes_json(args.pdf, args.page, version, root)
+    pdir = paths.page_dir(args.pdf, args.page, version, root)
+    screened = os.path.join(pdir, f"{paths.prefix(args.pdf, args.page, version)}_boxes_screened.json")
+    refined = os.path.join(pdir, "boxes_refined.json")
+    if not args.boxes:
+        if os.path.exists(screened):
+            boxes_path = screened
+        elif args.prefer_refined and os.path.exists(refined):
+            boxes_path = refined  # tightened boxes (ocr.refine_boxes) cut neighbour contamination
     with open(boxes_path) as f:
         boxes = json.load(f)
     vectorize_boxes_inksight(

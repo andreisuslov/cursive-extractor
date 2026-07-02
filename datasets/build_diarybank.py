@@ -157,10 +157,15 @@ def _version(page_dir: str) -> int:
     return int(m.group(1)) if m and m.group(1) else 0
 
 
-def latest_strokes(output_root: str) -> list[str]:
-    """One strokes.json per (diary, page), choosing the highest page version."""
+def latest_strokes(output_root: str, suffix: str = "strokes.json") -> list[str]:
+    """One strokes file per (diary, page), choosing the highest page version.
+
+    ``suffix`` selects which strokes flavour to collect: the default matches the
+    skeleton-traced ``*_strokes.json``; ``strokes_qa.json`` selects the QA'd
+    InkSight derenders (``ocr.ink_qa`` output, with ``metadata.qa`` scores).
+    """
     best: dict[tuple, tuple] = {}
-    for sj in glob.glob(os.path.join(output_root, "*", "page_*", "*strokes.json")):
+    for sj in glob.glob(os.path.join(output_root, "*", "page_*", f"*{suffix}")):
         page_dir = os.path.dirname(sj)
         diary = os.path.relpath(sj, output_root).split(os.sep)[0]
         page_num = int(re.search(r"page_(\d+)", page_dir).group(1))
@@ -200,12 +205,30 @@ def main() -> None:
         help="drop words with strokes/char above this (0=off; ~6 = p90)",
     )
     ap.add_argument("--exclude", nargs="*", default=["test_document"], help="diary slugs to skip")
+    ap.add_argument(
+        "--strokes-suffix",
+        default="strokes.json",
+        help="strokes filename suffix to collect (strokes_qa.json = QA'd InkSight derenders)",
+    )
+    ap.add_argument(
+        "--min-qa",
+        type=float,
+        default=0.0,
+        help="drop entries whose metadata.qa (AIoU-F1 trace fidelity) is missing or below this "
+        "(0=off)",
+    )
+    ap.add_argument(
+        "--require-label-ok",
+        action="store_true",
+        help="drop entries whose metadata.label_ok (ocr.verify_labels read-back) is false; "
+        "entries without the field are kept",
+    )
     args = ap.parse_args()
 
     entries: list[dict] = []
     per_author: collections.Counter = collections.Counter()
     dropped = 0
-    for sj in sorted(latest_strokes(args.output_root)):
+    for sj in sorted(latest_strokes(args.output_root, args.strokes_suffix)):
         diary = os.path.relpath(sj, args.output_root).split(os.sep)[0]
         if diary in args.exclude:
             continue
@@ -217,6 +240,14 @@ def main() -> None:
             meta = dict(box.get("metadata") or {})
             text = box.get("text") or meta.get("asciiSequence") or ""
             if len(pts) < args.min_points or not text.strip():
+                dropped += 1
+                continue
+            if args.min_qa > 0:
+                qa = meta.get("qa")
+                if not isinstance(qa, (int, float)) or qa < args.min_qa:
+                    dropped += 1
+                    continue
+            if args.require_label_ok and "label_ok" in meta and not meta["label_ok"]:
                 dropped += 1
                 continue
             nchar = max(1, len(text))
