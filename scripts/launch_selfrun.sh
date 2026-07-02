@@ -142,13 +142,19 @@ print(f'>>> hard ceiling: MAX_HOURS=$MAX_HOURS (~USD {$MAX_HOURS*r:.2f} worst ca
 if [ "$YES" -ne 1 ]; then echo "!!! dry run -- re-run with --yes to launch."; exit 1; fi
 command -v runpodctl >/dev/null || { echo "runpodctl not found" >&2; exit 2; }
 
-# ---- fetch keys from envchain (only ever written to the pod's env file) -------
-echo ">>> reading keys from envchain (wandb, gemini, runpod)"
-WANDB_KEY=$(envchain wandb sh -c 'printf %s "$WANDB_API_KEY"') || { echo "no WANDB_API_KEY" >&2; exit 2; }
-RUNPOD_KEY=$(envchain runpod sh -c 'printf %s "$RUNPOD_API_KEY"') || { echo "no RUNPOD_API_KEY" >&2; exit 2; }
+# ---- keys: use the env if already set (e.g. avid-m1 secrets file), else envchain.
+# Only ever written to the pod's /root/selfrun.env.
+echo ">>> resolving keys (env, else envchain wandb/gemini/runpod)"
+WANDB_KEY="${WANDB_API_KEY:-}"
+[ -n "$WANDB_KEY" ] || WANDB_KEY=$(envchain wandb sh -c 'printf %s "$WANDB_API_KEY"' 2>/dev/null) || true
+RUNPOD_KEY="${RUNPOD_API_KEY:-}"
+[ -n "$RUNPOD_KEY" ] || RUNPOD_KEY=$(envchain runpod sh -c 'printf %s "$RUNPOD_API_KEY"' 2>/dev/null) || true
 GOOGLE_KEY=""
-[ "$NO_VERIFY" -eq 1 ] || GOOGLE_KEY=$(envchain gemini sh -c 'printf %s "$GOOGLE_API_KEY"') || true
-[ -n "$WANDB_KEY" ] && [ -n "$RUNPOD_KEY" ] || { echo "missing keys" >&2; exit 2; }
+if [ "$NO_VERIFY" -ne 1 ]; then
+  GOOGLE_KEY="${GOOGLE_API_KEY:-}"
+  [ -n "$GOOGLE_KEY" ] || GOOGLE_KEY=$(envchain gemini sh -c 'printf %s "$GOOGLE_API_KEY"' 2>/dev/null) || true
+fi
+[ -n "$WANDB_KEY" ] && [ -n "$RUNPOD_KEY" ] || { echo "missing WANDB/RUNPOD key (set env or envchain)" >&2; exit 2; }
 
 # ---- pod lifecycle (teardown ONLY until handoff) -----------------------------
 POD_ID=""; HANDOFF=0
