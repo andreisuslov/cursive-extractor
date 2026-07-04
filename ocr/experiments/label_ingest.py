@@ -21,12 +21,15 @@ def _ordered_cuts(cuts):
     return sorted(cuts, key=lambda c: sum(p[0] for p in c) / len(c))
 
 
-def letter_polys(cuts, bw, bh, text):
+def letter_polys(cuts, bw, bh, text, end_cuts=False):
     """Per-letter ``(char, polygon[[x,y]...])`` in CROP-LOCAL coords, between consecutive
     boundary polylines (left edge, the L-1 ordered cuts, right edge). Cuts are polylines
     (slanted/curved), so each letter is a polygon, not a rectangle."""
     srt = [sorted(c, key=lambda p: p[1]) for c in _ordered_cuts(cuts)]
-    bnds = [[[0, 0], [0, bh]], *srt, [[bw, 0], [bw, bh]]]
+    if end_cuts and len(srt) >= 2:                   # end-cuts mode: the first & last cut ARE the boundaries
+        bnds = list(srt)
+    else:                                            # classic: the box edges are the first/last boundary
+        bnds = [[[0, 0], [0, bh]], *srt, [[bw, 0], [bw, bh]]]
     out = []
     for k in range(len(bnds) - 1):
         if k >= len(text):
@@ -55,7 +58,7 @@ def ingest(corrected, page_rgb):
         bw, bh = x1 - x0, y1 - y0
         src = page_rgb[y0:y1, x0:x1]
         paper = np.median(src.reshape(-1, src.shape[-1]), axis=0)  # ink is a minority -> paper
-        for ch, poly in letter_polys(w["cuts"], bw, bh, w["text"]):
+        for ch, poly in letter_polys(w["cuts"], bw, bh, w["text"], w.get("endCuts")):
             pts = np.array(poly, np.int32)
             bx0, by0 = max(0, pts[:, 0].min()), max(0, pts[:, 1].min())
             bx1, by1 = min(src.shape[1], pts[:, 0].max()), min(src.shape[0], pts[:, 1].max())
