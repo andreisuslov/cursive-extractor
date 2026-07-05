@@ -20,7 +20,7 @@
 </head>
 <body>
 <div id="wrap">
-  <h2>Letter labeller</h2>
+  <h2>Letter labeller <span id="curFile" style="font-size:15px;font-weight:400;color:#777">— no file open</span></h2>
   <p class="muted">Load <code>label_review.json</code>. Cuts are <b>polylines</b> — drag a handle
     (top/bottom = slant), drag the line body to slide the whole cut, dbl-click / <kbd>⌥</kbd>-click a
     cut to add a midpoint (curve), <kbd>shift</kbd>+click a handle to delete a point. Labels auto-fill
@@ -28,8 +28,8 @@
     on empty space adds one (any tool) — use this to match the cut count after editing a word.
     <b>+Cut</b>: click to drop a new cut.
     <b>Eraser</b>: paint over non-letter ink — it's filled with the paper colour.
-    <b>Pan img</b>: drag to move the underlying image when a word (e.g. "John") was mis-captured, or
-    drag a box <b>edge</b> to fit the word's <b>width</b>; <b>＋/−</b> (or <kbd>+</kbd>/<kbd>−</kbd>) <b>zoom the word</b>
+    <b>Move / Pan</b>: one tool — drag a cut to adjust it, drag a box <b>edge</b> to fit the word's <b>width</b>,
+    or drag <b>empty space to pan</b> the word to the centre (cuts + erase ride along); <b>＋/−</b> (or <kbd>+</kbd>/<kbd>−</kbd>) <b>zoom the word</b>
     inside the fixed guide-lane — the baseline stays on the blue line while you size the word so its body
     meets the green x-height and caps meet the orange line (every crop is normalised to one height). Progress
     <b>auto-saves</b> to this browser. <b>Open file…</b> then <kbd>⌘S</kbd> writes changes back into
@@ -38,17 +38,18 @@
     <b>x-h</b>/<b>cap</b> sliders) — <b>tilt</b> the word (<kbd>[</kbd>/<kbd>]</kbd>, <kbd>\</kbd> reset)
     so its baseline runs along the blue line. <b>Remove lines</b>: pick the eyedropper, click a ruled
     line to sample its colour, then Erase.
-    <kbd>⌘space</kbd> next · <kbd>⏎</kbd> done+next · <kbd>s</kbd>/<kbd>Delete</kbd> remove word ·
+    <kbd>⌘space</kbd> next · <kbd>⏎</kbd> done+next (on the last word, jumps to the next file in an opened folder) ·
+    <kbd>Delete</kbd> delete entry (undoable) · <kbd>s</kbd> skip ·
     <kbd>←/→</kbd> move · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>⌘Z</kbd> undo · <kbd>⌘⇧Z</kbd> redo.</p>
 
   <div class="row">
-    load <input type="file" id="file" accept="application/json" title="label_review.json, resume.json, or an exported labels_corrected.json — all work here" />
-    <button id="openFile" title="open a .json for editing + in-place Save (Chrome/Edge)">Open file…</button>
+    <span id="loadWrap">load <input type="file" id="file" accept="application/json" title="view-only load — Save will download a copy" /></span>
+    <button id="openFile" title="open a single .json — ⌘S writes straight back into it, in its own folder">📂 Open file…</button>
+    <button id="openFolder" title="open a folder and step through every .json in it (Enter on the last word jumps to the next file)">📁 Open folder…</button>
     <span class="sep"></span>
-    <button id="tMove" class="on">Move</button>
+    <button id="tMove" class="on">Move / Pan</button>
     <button id="tCut">+ Cut</button>
     <button id="tErase">Eraser</button>
-    <button id="tPan">Pan img</button>
     <button id="shrink">＋ bigger</button>
     <button id="grow">− smaller</button>
     tilt <input type="range" id="tilt" min="-45" max="45" step="0.5" value="0" style="width:90px" title="rotate the word so its baseline runs along the guide lines ([ / ] nudge, \ reset)"><span id="tiltval" class="muted">0°</span>
@@ -56,11 +57,14 @@
     cap <input type="range" id="cap" min="0.9" max="1.6" step="0.05" value="1.25" style="width:70px" title="cap-height guide line (orange)"><span id="capval" class="muted">1.25</span>
     brush <input type="range" id="brush" min="4" max="40" value="12" style="width:80px">
     <button id="clearErase">clear erase</button>
+    <button id="propose" title="drop evenly-spaced cuts for this word's letters (p) — then just correct them">✂ propose cuts</button>
     <button id="auto" title="add draggable cuts at the very start and end = first/last-letter boundaries">＋ end cuts</button>
   </div>
   <div class="row">
     <button id="prev">◀ Prev</button>
     <button id="next">Next ▶ (⌘space)</button>
+    <button id="prevFile" title="previous file in the folder (saves current first)">◀◀ file</button>
+    <button id="nextFile" title="next file in the folder (saves current first)">file ▶▶</button>
     <button id="done">✓ Done+next (⏎)</button>
     <button id="skip">Skip (s)</button>
     <button id="saveFile" title="write changes back into the opened file (⌘S)">💾 Save</button>
@@ -166,7 +170,14 @@ function draw(){ ctx.clearRect(0,0,cv.width,cv.height); if(!words.length) return
   if(document.activeElement!==$("wtext")) $("wtext").value=w.text;   // reflect current word (unless being edited)
   $("tilt").value=w.angle||0; $("tiltval").textContent=(w.angle||0)+"°";
   $("xhval").textContent=(+$("xh").value); $("capval").textContent=(+$("cap").value);   // global guide prefs
-  scheduleSave(); }
+  showCurFile(); scheduleSave(); }
+// persistent header indicator of the file being edited (name + whether ⌘S saves in place)
+function showCurFile(){ const el=$("curFile"); if(!el) return;
+  if(!pageURL){ el.textContent="— no file open"; el.style.color="#777"; el.title=""; return; }
+  const name=(fileHandle&&fileHandle.name)||lastName||"(loaded)", inPlace=!!fileHandle;
+  const pos = dirHandle ? " (file "+(dirIndex+1)+"/"+dirFiles.length+")" : "";
+  el.textContent="— 📄 "+name+pos+(inPlace?"  ·  ⌘S saves here":"  ·  view (Save asks where)");
+  el.style.color=inPlace?"#2e7d32":"#b06a00"; el.title=inPlace?"⌘S writes back into this file":"opened read-only; Save will prompt for a location"; }
 
 function mx(e){return e.offsetX*(cv.width/cv.getBoundingClientRect().width);}
 function my(e){return e.offsetY*(cv.height/cv.getBoundingClientRect().height);}
@@ -181,8 +192,15 @@ function segDist(px,py,ax,ay,bx,by){ const dx=bx-ax,dy=by-ay,L=dx*dx+dy*dy||1; l
 function snap(){ return {i, box:clone(words[i].box), cuts:clone(words[i].cuts), erase:clone(words[i].erase||[]), text:words[i].text, angle:words[i].angle||0, endCuts:!!words[i].endCuts}; }
 function applySnap(s){ i=s.i; words[i].box=clone(s.box); words[i].cuts=clone(s.cuts); words[i].erase=clone(s.erase); if(s.text!=null) words[i].text=s.text; words[i].angle=s.angle||0; words[i].endCuts=!!s.endCuts; words[i].paper=null; draw(); }
 function pushUndo(){ undoStack.push(snap()); if(undoStack.length>200) undoStack.shift(); redoStack=[]; }
-function undo(){ if(!undoStack.length)return; redoStack.push(snap()); applySnap(undoStack.pop()); }
-function redo(){ if(!redoStack.length)return; undoStack.push(snap()); applySnap(redoStack.pop()); }
+function undo(){ if(!undoStack.length)return; const e=undoStack.pop();
+  if(e.struct){ redoStack.push({struct:true, words:clone(words), i}); words=clone(e.words); i=Math.max(0,Math.min(e.i,words.length-1)); draw(); return; }
+  redoStack.push(snap()); applySnap(e); }
+function redo(){ if(!redoStack.length)return; const e=redoStack.pop();
+  if(e.struct){ undoStack.push({struct:true, words:clone(words), i}); words=clone(e.words); i=Math.max(0,Math.min(e.i,words.length-1)); draw(); return; }
+  undoStack.push(snap()); applySnap(e); }
+// Delete = remove the entry entirely (11 -> 10), not "skip". Undoable via ⌘Z (whole-list snapshot).
+function deleteWord(){ if(!words.length)return; undoStack.push({struct:true, words:clone(words), i}); if(undoStack.length>200)undoStack.shift(); redoStack=[];
+  words.splice(i,1); if(i>=words.length) i=words.length-1; if(i<0)i=0; draw(); }
 // auto-save per-word progress (cuts/erase/box/done) to localStorage so reloads don't lose work
 function scheduleSave(){ if(!sig) return; clearTimeout(saveT); saveT=setTimeout(()=>{ try{
   localStorage.setItem(sig, JSON.stringify({eraseSpace:"page", words:words.map(w=>({text:w.text,box:w.box,cuts:w.cuts,erase:w.erase||[],done:!!w.done,skip:!!w.skip,angle:w.angle||0,endCuts:!!w.endCuts}))})); }catch(_e){} }, 500); }
@@ -199,17 +217,18 @@ cv.addEventListener("mousedown",e=>{ if(!words.length||e.button!==0||e.ctrlKey) 
   if(tool==="lines"){ const w=words[i], px=w.box[0]+T.fromX(X), py=w.box[1]+T.fromY(Y); lineColor=sampleAt(px,py);
     $("lineSwatch").style.background="rgb("+lineColor.join(",")+")"; $("lineHint").textContent="line colour sampled — click 'Erase lines → paper' (raise tol to catch more)"; return; }
   if(tool==="erase"){ pushUndo(); erasing=true; addDab(X,Y); return; }
-  if(tool==="pan"){ const ed=edgeAt(X,Y,T);
-    if(ed.l||ed.r||ed.t||ed.b){ drag={resize:true, ed, box:clone(words[i].box), dx0:T.dx,dy0:T.dy,dw0:T.dw,dh0:T.dh,bw0:T.bw,bh0:T.bh}; return; }
-    drag={pan:true, sx:X, sy:Y, box:clone(words[i].box), cuts0:clone(words[i].cuts)}; return; }
   if(tool==="cut"){ pushUndo(); words[i].cuts.push([[T.fromX(X),0],[T.fromX(X),T.bh]]); draw(); return; }
+  // --- unified Move/Pan (the "move" tool): cuts first, then box-edge resize, then pan the image ---
   if(e.altKey){ const nc=nearestCut(X,Y); if(nc&&nc.d<SEG_HIT){ pushUndo(); words[i].cuts[nc.ci].push([T.fromX(X),T.fromY(Y)]); words[i].cuts[nc.ci].sort((a,b)=>a[1]-b[1]); draw(); } return; }
   const np=nearestPoint(X,Y);
   if(np && np.d<HANDLE_HIT){ if(e.shiftKey){ pushUndo(); const c=words[i].cuts[np.ci]; c.splice(np.pi,1); if(c.length<2) words[i].cuts.splice(np.ci,1); draw(); } else drag={ci:np.ci,pi:np.pi}; return; }
-  const nc=nearestCut(X,Y); if(nc && nc.d<SEG_HIT) drag={whole:true, ci:nc.ci, startX:T.fromX(X), orig:clone(words[i].cuts[nc.ci])}; });
+  const nc=nearestCut(X,Y); if(nc && nc.d<SEG_HIT){ drag={whole:true, ci:nc.ci, startX:T.fromX(X), orig:clone(words[i].cuts[nc.ci])}; return; }
+  const ed=edgeAt(X,Y,T);                                     // near a box edge -> resize the frame
+  if(ed.l||ed.r||ed.t||ed.b){ drag={resize:true, ed, box:clone(words[i].box), dx0:T.dx,dy0:T.dy,dw0:T.dw,dh0:T.dh,bw0:T.bw,bh0:T.bh}; return; }
+  drag={pan:true, sx:X, sy:Y, box:clone(words[i].box), cuts0:clone(words[i].cuts)}; });  // else pan the image (carries cuts + dabs)
 cv.addEventListener("mousemove",e=>{ if(!words.length) return; const T=view(),X=mx(e),Y=my(e);
   if(erasing){ addDab(X,Y); return; }
-  if(!drag){ if(tool==="pan") cv.style.cursor=edgeCursor(edgeAt(X,Y,T)); return; }  // hover cursor over edges
+  if(!drag){ if(tool==="move") cv.style.cursor=edgeCursor(edgeAt(X,Y,T)); return; }  // Move/Pan: resize cursor near edges, else grab
   if(!drag.snapped){ pushUndo(); drag.snapped=true; }              // one undo entry per drag gesture
   if(drag.resize){ const d=drag, W=page.naturalWidth, H=page.naturalHeight, MIN=12;   // drag box edges (fixed transform)
     const pX=px=>d.box[0]+(px-d.dx0)/d.dw0*d.bw0, pY=py=>d.box[1]+(py-d.dy0)/d.dh0*d.bh0;
@@ -258,9 +277,9 @@ cv.addEventListener("wheel",e=>{ if(!words.length||!(e.metaKey||e.ctrlKey)) retu
   w.box=[Math.round(nx0),Math.round(ny0),Math.round(nx0+nbw),Math.round(ny0+nbh)]; w.paper=null; draw();
 },{passive:false});
 
-function setTool(t){ tool=t; for(const[id,n] of [["tMove","move"],["tCut","cut"],["tErase","erase"],["tPan","pan"],["tLines","lines"]]) $(id).classList.toggle("on",n===t);
-  cv.style.cursor = t==="pan" ? "grab" : "crosshair"; }
-$("tMove").onclick=()=>setTool("move"); $("tCut").onclick=()=>setTool("cut"); $("tErase").onclick=()=>setTool("erase"); $("tPan").onclick=()=>setTool("pan"); $("tLines").onclick=()=>setTool("lines");
+function setTool(t){ tool=t; for(const[id,n] of [["tMove","move"],["tCut","cut"],["tErase","erase"],["tLines","lines"]]) $(id).classList.toggle("on",n===t);
+  cv.style.cursor = t==="move" ? "grab" : "crosshair"; }   // Move/Pan shows grab (edge cursors on hover)
+$("tMove").onclick=()=>setTool("move"); $("tCut").onclick=()=>setTool("cut"); $("tErase").onclick=()=>setTool("erase"); $("tLines").onclick=()=>setTool("lines");
 // ---- ruled-line removal: sample a line colour anywhere on the page, then merge every matching
 // (non-ink) pixel into the paper colour across the WHOLE page. Structure-free, colour-driven.
 function pageC(){ if(!pageCanvas){ pageCanvas=document.createElement("canvas"); pageCanvas.width=page.naturalWidth; pageCanvas.height=page.naturalHeight; pageCanvas.getContext("2d").drawImage(page,0,0);} return pageCanvas.getContext("2d"); }
@@ -297,8 +316,15 @@ $("xh").addEventListener("input",()=>{ $("xhval").textContent=(+$("xh").value); 
 $("cap").addEventListener("input",()=>{ $("capval").textContent=(+$("cap").value); draw(); });
 function nudgeTilt(d){ if(!words.length)return; pushUndo(); words[i].angle=Math.max(-45,Math.min(45,(words[i].angle||0)+d)); draw(); }
 function go(d){ i=Math.max(0,Math.min(words.length-1,i+d)); draw(); }
+// propose cuts: L-1 evenly-spaced internal cuts for the word's letter count (uniform baseline — ~73% land <0.25bh off; you just correct)
+function proposeCuts(){ if(!words.length)return; const w=words[i], L=(w.text||"").length, bw=w.box[2]-w.box[0], bh=w.box[3]-w.box[1];
+  if(L<2)return; pushUndo(); w.cuts=[]; for(let k=1;k<L;k++){ const x=Math.round(k*bw/L); w.cuts.push([[x,0],[x,bh]]); } w.endCuts=false; draw(); }
+$("propose").onclick=proposeCuts;
 $("prev").onclick=()=>go(-1); $("next").onclick=()=>go(1);
-$("done").onclick=()=>{ if(words.length){words[i].done=true;words[i].skip=false;go(1);} };
+$("done").onclick=()=>{ if(!words.length)return; words[i].done=true; words[i].skip=false;
+  if(i<words.length-1) go(1);
+  else if(dirHandle && dirIndex<dirFiles.length-1) gotoFile(1);    // last word + folder mode -> save current + jump to next file
+  else draw(); };
 $("skip").onclick=()=>{ if(words.length){pushUndo();words[i].skip=true;go(1);} };
 // the full self-contained doc: page + words (labels/box/cuts/erase/angle/done/skip) + resume cursor
 function buildDoc(){ return {page:pageURL, eraseSpace:"page", cursor:i,
@@ -306,25 +332,47 @@ function buildDoc(){ return {page:pageURL, eraseSpace:"page", cursor:i,
 function downloadDoc(doc){ const b=new Blob([JSON.stringify(doc)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="labels_corrected.json"; a.click(); }
 $("export").onclick=()=>{ if(!pageURL){ alert("Load a page first."); return; } downloadDoc(buildDoc()); };
 // --- open + write-in-place via the File System Access API (Chrome/Edge). Falls back to download. ---
-let fileHandle=null;
-async function openViaPicker(){ if(!window.showOpenFilePicker){ alert("This browser can't write files in place. Use Chrome/Edge (serve over http://localhost if file:// blocks it), or use 'load' + Export copy."); return; }
-  try{ const [h]=await window.showOpenFilePicker({types:[{description:"labels JSON",accept:{"application/json":[".json"]}}]});
-    const data=JSON.parse(await (await h.getFile()).text()); fileHandle=h; loadDoc(data); $("saveState").textContent="opened "+h.name+" — ⌘S saves in place"; }
+let fileHandle=null, lastName=null;
+let dirHandle=null, dirFiles=[], dirIndex=0;   // folder-stepping: walk every .json in the opened folder
+// id:"labelboxes" makes Chrome REMEMBER the folder across open/save dialogs — after you first open
+// from ~/Downloads/label_boxes, every later dialog defaults there instead of Downloads.
+async function openViaPicker(){ if(!window.showOpenFilePicker){ alert("This browser can't save in place — use Chrome or Edge (via the open_labeller.command launcher). You can still 'load' + Export copy."); return; }
+  try{ const [h]=await window.showOpenFilePicker({id:"labelboxes", types:[{description:"labels JSON",accept:{"application/json":[".json"]}}]});
+    const data=JSON.parse(await (await h.getFile()).text()); fileHandle=h; lastName=h.name; loadDoc(data); $("saveState").textContent="editing "+h.name+" — ⌘S saves here in place"; }
   catch(e){ if(e.name!=="AbortError") alert("Open failed: "+e.message); } }
 async function saveInPlace(){ if(!pageURL){ alert("Nothing loaded."); return; } const doc=buildDoc();
   try{
-    if(!fileHandle){                                        // opened via "load" (no handle) -> ask which file to write, then remember it
+    if(!fileHandle){                                        // opened via "load" (no write handle) -> ask where; keeps the name + remembers the folder (id)
       if(window.showSaveFilePicker){
-        try{ fileHandle=await window.showSaveFilePicker({suggestedName:"labels.json", types:[{description:"labels JSON",accept:{"application/json":[".json"]}}]}); }
+        try{ fileHandle=await window.showSaveFilePicker({id:"labelboxes", suggestedName:lastName||"labels.json", types:[{description:"labels JSON",accept:{"application/json":[".json"]}}]}); lastName=fileHandle.name; }
         catch(e){ if(e.name==="AbortError") return; downloadDoc(doc); $("saveState").textContent="couldn't open a save target — downloaded a copy instead"; return; }
       } else { downloadDoc(doc); $("saveState").textContent="downloaded a copy (this browser can't save in place — use Chrome/Edge)"; return; }
     }
     let p=await fileHandle.queryPermission({mode:"readwrite"}); if(p!=="granted") p=await fileHandle.requestPermission({mode:"readwrite"});
     if(p!=="granted"){ alert("Write permission denied."); return; }
     const wr=await fileHandle.createWritable(); await wr.write(JSON.stringify(doc)); await wr.close();
-    $("saveState").textContent="saved ✓ "+(fileHandle.name||"")+" "+new Date().toLocaleTimeString();
+    showCurFile(); $("saveState").textContent="saved ✓ "+(fileHandle.name||"")+" "+new Date().toLocaleTimeString();
   }catch(e){ if(e.name!=="AbortError") alert("Save failed: "+e.message); } }
 $("openFile").onclick=openViaPicker; $("saveFile").onclick=saveInPlace;
+// --- open a whole FOLDER and step through its .json files (save-in-place per file) ---
+async function openFolder(){ if(!window.showDirectoryPicker){ alert("Folder stepping needs Chrome/Edge (via open_labeller.command)."); return; }
+  try{ const dh=await window.showDirectoryPicker({id:"labelboxes", mode:"readwrite"});
+    const names=[]; for await(const [name,h] of dh.entries()){ if(h.kind==="file" && name.toLowerCase().endsWith(".json")) names.push(name); }
+    names.sort();
+    if(!names.length){ alert("No .json files in that folder."); return; }
+    dirHandle=dh; dirFiles=names; await loadFromDir(0); }
+  catch(e){ if(e.name!=="AbortError") alert("Open folder failed: "+e.message); } }
+async function loadFromDir(idx){ dirIndex=Math.max(0,Math.min(dirFiles.length-1,idx)); const name=dirFiles[dirIndex];
+  const fh=await dirHandle.getFileHandle(name); fileHandle=fh; lastName=name;
+  const data=JSON.parse(await (await fh.getFile()).text()); loadDoc(data);
+  $("saveState").textContent="file "+(dirIndex+1)+"/"+dirFiles.length+" — editing "+name; }
+async function gotoFile(delta){ if(!dirHandle) return; const ni=Math.max(0,Math.min(dirFiles.length-1,dirIndex+delta)); if(ni===dirIndex && delta) return;
+  await saveInPlace();                                    // save the current file before switching
+  await loadFromDir(ni); }
+$("openFolder").onclick=openFolder; $("prevFile").onclick=()=>gotoFile(-1); $("nextFile").onclick=()=>gotoFile(1);
+// one obvious path: if the browser can save in place, hide the view-only "load" picker; else hide "Open file…"
+if(window.showOpenFilePicker){ $("loadWrap").style.display="none"; } else { $("openFile").style.display="none"; }
+if(!window.showDirectoryPicker){ $("openFolder").style.display="none"; }
 // edit the recognized word (e.g. "load" -> "had"); labels + cut-count update live
 $("wtext").addEventListener("focus",()=>{ if(words.length) pushUndo(); });
 $("wtext").addEventListener("input",()=>{ if(words.length){ words[i].text=$("wtext").value; draw(); } });
@@ -354,7 +402,7 @@ $("file").addEventListener("change",e=>{ const f=e.target.files[0]; if(!f)return
   r.onload=()=>{ let data; try{data=JSON.parse(r.result);}catch(_e){alert("Not valid JSON");return;}
     if(Array.isArray(data)){ if(!words.length||!pageURL){ alert("This file has labels only (no page). Load label_review.json / resume.json first, then this to merge."); return; }
       const n=applyEdits(data); draw(); alert("Merged "+n+" words onto the loaded page."); }
-    else { fileHandle=null; loadDoc(data); } };   // plain <input> load = no in-place handle (Save downloads a copy)
+    else { fileHandle=null; lastName=f.name; loadDoc(data); } };   // plain <input> load = no write handle (Save asks where, keeping this name)
   r.readAsText(f); });
 window.addEventListener("keydown",e=>{ if(!words.length) return;
   if(document.activeElement===$("wtext")){ if(e.key==="Enter") $("wtext").blur(); return; }  // typing the word: no shortcuts
@@ -366,12 +414,13 @@ window.addEventListener("keydown",e=>{ if(!words.length) return;
     else if(e.key==="-"||e.key==="_"){ e.preventDefault(); resizeBox(1.25); }
     return; }
   if(e.key===" ") { e.preventDefault(); return; }                 // bare space does nothing
-  if(e.key==="Delete"||e.key==="Backspace"){ e.preventDefault(); $("skip").click(); return; }  // remove word
+  if(e.key==="Delete"||e.key==="Backspace"){ e.preventDefault(); deleteWord(); return; }  // remove the entry entirely (undoable)
   if(e.key==="="||e.key==="+"){ e.preventDefault(); resizeBox(0.8); return; }   // zoom in (closer)
   if(e.key==="-"||e.key==="_"){ e.preventDefault(); resizeBox(1.25); return; }  // zoom out (farther)
   if(e.key==="Enter"){ e.preventDefault(); $("done").click(); }
   else if(e.key==="s") $("skip").click(); else if(e.key==="ArrowRight") $("next").click(); else if(e.key==="ArrowLeft") $("prev").click();
   else if(e.key==="m") setTool("move"); else if(e.key==="c") setTool("cut"); else if(e.key==="e") setTool("erase");
+  else if(e.key==="p") proposeCuts();
   else if(e.key==="[") { e.preventDefault(); nudgeTilt(-0.5); } else if(e.key==="]") { e.preventDefault(); nudgeTilt(0.5); }
   else if(e.key==="\\") { e.preventDefault(); if(words.length){pushUndo(); words[i].angle=0; draw();} } });
 draw();

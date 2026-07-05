@@ -59,6 +59,8 @@ def ingest(corrected, page_rgb):
         src = page_rgb[y0:y1, x0:x1]
         paper = np.median(src.reshape(-1, src.shape[-1]), axis=0)  # ink is a minority -> paper
         for ch, poly in letter_polys(w["cuts"], bw, bh, w["text"], w.get("endCuts")):
+            if not ch.strip():        # ponytail: word-gap slice (multi-word box), not a letter
+                continue
             pts = np.array(poly, np.int32)
             bx0, by0 = max(0, pts[:, 0].min()), max(0, pts[:, 1].min())
             bx1, by1 = min(src.shape[1], pts[:, 0].max()), min(src.shape[0], pts[:, 1].max())
