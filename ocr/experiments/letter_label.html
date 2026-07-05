@@ -57,7 +57,7 @@
     cap <input type="range" id="cap" min="0.9" max="1.6" step="0.05" value="1.25" style="width:70px" title="cap-height guide line (orange)"><span id="capval" class="muted">1.25</span>
     brush <input type="range" id="brush" min="4" max="40" value="12" style="width:80px">
     <button id="clearErase">clear erase</button>
-    <button id="propose" title="drop evenly-spaced cuts for this word's letters (p) — then just correct them">✂ propose cuts</button>
+    <button id="propose" title="learned model proposes this word's cuts (p) — then just correct them">✂ propose cuts</button>
     <button id="auto" title="add draggable cuts at the very start and end = first/last-letter boundaries">＋ end cuts</button>
   </div>
   <div class="row">
@@ -316,9 +316,46 @@ $("xh").addEventListener("input",()=>{ $("xhval").textContent=(+$("xh").value); 
 $("cap").addEventListener("input",()=>{ $("capval").textContent=(+$("cap").value); draw(); });
 function nudgeTilt(d){ if(!words.length)return; pushUndo(); words[i].angle=Math.max(-45,Math.min(45,(words[i].angle||0)+d)); draw(); }
 function go(d){ i=Math.max(0,Math.min(words.length-1,i+d)); draw(); }
-// propose cuts: L-1 evenly-spaced internal cuts for the word's letter count (uniform baseline — ~73% land <0.25bh off; you just correct)
-function proposeCuts(){ if(!words.length)return; const w=words[i], L=(w.text||"").length, bw=w.box[2]-w.box[0], bh=w.box[3]-w.box[1];
-  if(L<2)return; pushUndo(); w.cuts=[]; for(let k=1;k<L;k++){ const x=Math.round(k*bw/L); w.cuts.push([[x,0],[x,bh]]); } w.endCuts=false; draw(); }
+// --- learned cut-predictor (ported from ocr/experiments/cut_predictor.py; numeric cores verified
+//     bit-identical to python). Slant-aware ink profile -> per-column logistic -> DP place L-1 cuts.
+const CUT_N=160, CUT_WIN=12, CUT_LAM=0.30;
+const CUT_W=[0.40641,0.32370,0.26023,0.21953,0.19809,0.18218,0.17343,0.17647,0.19601,0.21331,0.21126,0.19042,0.18249,0.16901,0.18718,0.21166,0.24214,0.26063,0.26633,0.25926,0.25691,0.27162,0.30041,0.33342,0.35864,-2.90949];  // cut_predictor.py --train
+function cropGray(w){ const [x0,y0,x1,y1]=w.box, bw=Math.round(x1-x0), bh=Math.round(y1-y0);
+  const oc=document.createElement("canvas"); oc.width=bw; oc.height=bh; const o=oc.getContext("2d");
+  o.fillStyle="#fff"; o.fillRect(0,0,bw,bh);                       // off-page area = white (matches python padding)
+  const sx=Math.max(0,x0), sy=Math.max(0,y0), sx2=Math.min(page.naturalWidth,x1), sy2=Math.min(page.naturalHeight,y1);
+  if(sx2>sx && sy2>sy) o.drawImage(page, sx,sy, sx2-sx,sy2-sy, sx-x0,sy-y0, sx2-sx,sy2-sy);
+  const d=o.getImageData(0,0,bw,bh).data, g=new Float64Array(bw*bh);
+  for(let k=0;k<bw*bh;k++){ const j=k*4; g[k]=0.299*d[j]+0.587*d[j+1]+0.114*d[j+2]; }   // luminance = PIL "L"
+  return {gray:g, H:bh, W:bw}; }
+function slantProf(gray,H,W){ const N=CUT_N,WIN=CUT_WIN, ink=new Float64Array(H*W); for(let k=0;k<H*W;k++) ink[k]=255-gray[k];
+  const ymid=H/2; let best=null,bs=-1;
+  for(let s=0;s<15;s++){ const sl=-0.7+1.4*s/14, p=new Float64Array(W);           // best shear collapses letters into sharp columns
+    for(let y=0;y<H;y++){ const sh=Math.round(sl*(y-ymid)), base=y*W;
+      for(let x=0;x<W;x++){ let xs=(x-sh)%W; if(xs<0)xs+=W; p[x]+=ink[base+xs]; } }
+    let s2=0,s1=0; for(let x=0;x<W;x++){ s2+=p[x]*p[x]; s1+=p[x]; }
+    const pk=s2/(s1*s1+1e-9); if(pk>bs){ bs=pk; best=p; } }
+  const prof=new Array(N);
+  for(let x=0;x<N;x++){ const t=(W-1)*x/(N-1), lo=Math.floor(t), hi=Math.min(W-1,lo+1), f=t-lo; prof[x]=best[lo]*(1-f)+best[hi]*f; }
+  const sm=new Array(N); for(let x=0;x<N;x++){ const a=x>0?prof[x-1]:0,b=prof[x],c=x<N-1?prof[x+1]:0; sm[x]=(a+b+c)/3; }
+  let mx=0; for(const v of sm) if(v>mx)mx=v; return mx>0?sm.map(v=>v/mx):sm; }
+function predictCuts(L, prof, bw){ const N=CUT_N,WIN=CUT_WIN,lam=CUT_LAM;
+  const pad=[]; for(let k=0;k<WIN;k++) pad.push(prof[0]); for(const v of prof) pad.push(v); for(let k=0;k<WIN;k++) pad.push(prof[N-1]);
+  const cost=new Array(N); for(let c=0;c<N;c++){ let z=CUT_W[2*WIN+1]; for(let j=0;j<2*WIN+1;j++) z+=CUT_W[j]*pad[c+j]; cost[c]=1-1/(1+Math.exp(-z)); }
+  const t=N/L, pen=g=>((g-t)/t)**2, INF=1e18;
+  const DP=Array.from({length:L-1},()=>new Array(N).fill(INF)), bk=Array.from({length:L-1},()=>new Array(N).fill(-1));
+  for(let x=1;x<N;x++) DP[0][x]=cost[x]+lam*pen(x);
+  for(let k=1;k<L-1;k++) for(let x=k+1;x<N;x++){ let best=INF,bj=-1; for(let xp=k;xp<x;xp++){ const v=DP[k-1][xp]+lam*pen(x-xp); if(v<best){best=v;bj=xp;} } DP[k][x]=cost[x]+best; bk[k][x]=bj; }
+  let best=INF,xe=-1; for(let x=L-1;x<N;x++){ const v=DP[L-2][x]+lam*pen(N-x); if(v<best){best=v;xe=x;} }
+  const cuts=[]; let x=xe,k=L-2; while(k>=0){ cuts.push(x); x=bk[k][x]; k--; }
+  cuts.sort((a,b)=>a-b); return cuts.map(c=>c*bw/N); }
+// propose cuts: learned model when we can read the crop, else uniform spacing. You just correct them.
+function proposeCuts(){ if(!words.length)return; const w=words[i], L=(w.text||"").length, bw=Math.round(w.box[2]-w.box[0]), bh=Math.round(w.box[3]-w.box[1]);
+  if(L<2)return; pushUndo();
+  let xs=null;
+  try{ const g=cropGray(w); xs=predictCuts(L, slantProf(g.gray,g.H,g.W), bw); }catch(e){ xs=null; }
+  if(!xs || xs.length!==L-1){ xs=[]; for(let k=1;k<L;k++) xs.push(k*bw/L); }      // fallback: uniform
+  w.cuts=xs.map(x=>[[Math.round(x),0],[Math.round(x),bh]]); w.endCuts=false; draw(); }
 $("propose").onclick=proposeCuts;
 $("prev").onclick=()=>go(-1); $("next").onclick=()=>go(1);
 $("done").onclick=()=>{ if(!words.length)return; words[i].done=true; words[i].skip=false;
