@@ -319,7 +319,7 @@ function go(d){ i=Math.max(0,Math.min(words.length-1,i+d)); draw(); }
 // --- learned cut-predictor (ported from ocr/experiments/cut_predictor.py; numeric cores verified
 //     bit-identical to python). Slant-aware ink profile -> per-column logistic -> DP place L-1 cuts.
 const CUT_N=160, CUT_WIN=12, CUT_LAM=0.30;
-const CUT_W=[0.40641,0.32370,0.26023,0.21953,0.19809,0.18218,0.17343,0.17647,0.19601,0.21331,0.21126,0.19042,0.18249,0.16901,0.18718,0.21166,0.24214,0.26063,0.26633,0.25926,0.25691,0.27162,0.30041,0.33342,0.35864,-2.90949];  // cut_predictor.py --train
+const CUT_W=[0.40713,0.33348,0.27579,0.23619,0.21336,0.19503,0.18529,0.18652,0.20135,0.21092,0.20425,0.18349,0.17814,0.16407,0.18399,0.20884,0.23762,0.25344,0.25633,0.24745,0.24610,0.26166,0.28953,0.31817,0.33821,-2.98033];  // cut_predictor.py --train
 function cropGray(w){ const [x0,y0,x1,y1]=w.box, bw=Math.round(x1-x0), bh=Math.round(y1-y0);
   const oc=document.createElement("canvas"); oc.width=bw; oc.height=bh; const o=oc.getContext("2d");
   o.fillStyle="#fff"; o.fillRect(0,0,bw,bh);                       // off-page area = white (matches python padding)

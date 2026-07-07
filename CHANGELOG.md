@@ -28,6 +28,13 @@ W&B-free on an Apple-Silicon laptop.
 `ocr/vectorize.py` is the bottleneck**, not the model or the segmentation. Decision-making,
 the run journey, and the trajectory-recovery plan are recorded in `WORKLOG.md`. See M14.
 
+**Labelling + cut-predictor update (2026-07).** Built a human-in-the-loop segmentation labeller
+(`letter_label.html`: guides, deskew, line-erase, in-place save, folder-stepping) and closed the first
+learning loop on it — a per-column boundary model trained on the user's own cuts now proposes the
+between-letter cuts in-browser, beating uniform spacing leave-one-file-out (**0.163 vs 0.187 MAE/bh,
+84% vs 80% within 0.25·bh** on 64 cut-words). The lever remains *more data* (esp. more writers); the
+labeller makes gathering it fast. See M15.
+
 > Companion doc: **`WORKLOG.md`** records the *why* and the *results* (decision-making);
 > this file records the *what-shipped* (implemented changes).
 
@@ -191,3 +198,25 @@ trajectory-recovery plan live in `WORKLOG.md` (2026-06-27 / 2026-06-28 entries).
 - `train_colab.ipynb` — Colab training harness for `diarybank` (clone private repo via PAT, wandb-only install to dodge Colab's numpy/numba conflict, team W&B entity, small `train_size`/`max_steps` for a fast validation run).
 - **Result (not a code change, recorded for the record):** 20,132-step L40S run produces angular scribble, not cursive; test_loss plateaus at ~1.79 after ~7k steps. **Root cause: stroke-order recovery** (nearest-neighbor `order_points` in `ocr/vectorize.py`) feeds the model wrong pen trajectories. HTR/Transkribus can't help (they output text, not pen paths).
 - **Next (planned, see WORKLOG):** Step 0 smoothness-based graph traversal to replace nearest-neighbor ordering; Step 1 a learned image→sequence recoverer trained on rendered online-handwriting pairs, validated directly by DTW. A deep-research survey of SOTA methods/datasets/code was launched to ground Step 1.
+
+## M15 — Human-in-the-loop cut labeller + a trained cut-predictor that beats uniform
+
+Turned the throwaway `letter_label.html` into a real segmentation-labelling workstation and closed the
+first learning loop on it: a model, trained on the user's own cuts, now proposes the between-letter
+cuts back in the tool. This is the flywheel M10–M13 kept pointing at — *more data via faster labelling*
+— made concrete. Full reasoning and the per-attempt numbers are in `WORKLOG.md` (2026-07 entries).
+
+**Labeller (`ocr/experiments/letter_label.html`).**
+- Typographic **guide grid** (baseline / x-height / cap, adjustable) and per-word **tilt to deskew**, so every crop can be normalised to one writing size.
+- **Ruled-line eraser** (eyedropper samples the line colour → merged into the paper) and a paper-colour dab eraser that rides with the image through zoom/pan.
+- **In-place Save** via the File System Access API — ⌘S writes straight back into the opened file, resumes at the last-edited word, sticky folder; the view-only `load` picker is hidden in Chrome so the "saved into Downloads" trap is gone. Persistent **open-file indicator** in the header.
+- **Open folder → step through every `.json`**: Enter on the last word saves and jumps to the next file; a batch workflow instead of one-file-at-a-time.
+- **Unified Move/Pan** tool (cut-drag → edge-resize → pan by hit priority; pan carries cuts + dabs with the image); baseline-anchored **image zoom in a fixed lane**; pan/zoom may hang off-page so corner content reaches the centre.
+- **Delete removes the entry** entirely (undoable) instead of marking it skipped; **end-cuts mode** gives draggable first/last-letter boundaries.
+- `ocr/experiments/label_boxes_ingest.py` — adjusted boxes → deskewed, de-lined, **uniform-height** word crops for InkSight (+ manifest, QA montage, selftest).
+
+**Cut-predictor (`ocr/experiments/cut_predictor.py`).**
+- Tested the usefulness of the manual cuts: 9 files → **589 letter segments** (520 after dropping word-gap slices). A raw-pixel kNN recogniser scores **9.8% leave-one-file-out / 18.5% random** (chance ~2%) — the cuts are clean; the recogniser is *data-starved*, not the cuts' fault.
+- Since the transcript gives the letter count, framed cutting as "place L−1 boundaries". Uniform-by-count is a strong baseline (**0.187 MAE/bh, 79.5% within 0.25·bh**). Per-letter width models and hand-built ink-valley heuristics (even slant-aware) **do not beat it**.
+- A **learned per-column boundary model** does: slant-aware ink profile → weighted logistic → DP with an even-spacing prior = **0.163 MAE/bh, 84.2% within 0.25·bh**, leave-one-file-out on 64 cut-words. Modest but real, and it grows with data. Module trains/evals/saves weights with a selftest.
+- **Ported into the labeller**: the **✂ propose cuts** button (`p`) runs the model in-browser (slant profile + logistic + DP, weights baked from `cut_model.json`, both numeric cores verified bit-identical to Python), falling back to uniform if the crop can't be read. `--rebake` refreshes the baked weights as more cuts accumulate.

@@ -14,8 +14,10 @@ Beats uniform guessing leave-one-file-out (unseen page): MAE 0.163 vs 0.187 /bh,
 0.25*bh (64 cut-words, 2026-07). Grows with data.
 
     python -m ocr.experiments.cut_predictor            # leave-one-file-out eval vs uniform
-    python -m ocr.experiments.cut_predictor --train    # fit on all data -> cut_model.json
+    python -m ocr.experiments.cut_predictor --rebake   # retrain on all cuts + bake weights into letter_label.html
+    python -m ocr.experiments.cut_predictor --train    # fit on all data -> cut_model.json only
     python -m ocr.experiments.cut_predictor --selftest
+    #   add --folder /path/to/label_boxes to point at a different cut set
 """
 
 import base64
@@ -23,6 +25,7 @@ import glob
 import io
 import json
 import os
+import re
 
 import numpy as np
 from PIL import Image
@@ -32,6 +35,8 @@ WIN = 12       # feature half-window; feature dim = 2*WIN+1
 EPS = 0.06     # a column is a "boundary" if within EPS*N of a human cut
 LAM = 0.30     # even-spacing prior weight in the DP
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "cut_model.json")
+HTML_PATH = os.path.join(os.path.dirname(__file__), "letter_label.html")   # labeller to re-bake weights into
+FOLDER = "/Users/ansuslov/Downloads/label_boxes"
 
 
 # --- data -------------------------------------------------------------------
@@ -175,6 +180,21 @@ def evaluate(folder):
     print(f"  learned:  MAE/bh {el.mean():.3f}   within .25bh {(el < 0.25).mean() * 100:.1f}%")
 
 
+def rebake(folder):
+    """Retrain on all cuts and bake the fresh weights straight into the labeller's CUT_W line."""
+    words = load_words(folder)
+    evaluate(folder)                                           # show progress vs uniform before committing
+    w = train(words)
+    json.dump({"N": N, "WIN": WIN, "lam": LAM, "w": w.tolist()}, open(MODEL_PATH, "w"))
+    new = "const CUT_W=[" + ",".join(f"{v:.5f}" for v in w) + "]"
+    patched, n = re.subn(r"const CUT_W=\[[^\]]*\]", new, open(HTML_PATH).read(), count=1)
+    if n != 1:
+        raise SystemExit(f"! could not find one 'const CUT_W=[...]' in {HTML_PATH} (found {n}) — labeller NOT updated")
+    open(HTML_PATH, "w").write(patched)
+    print(f"\nre-baked {len(w)} weights from {len(words)} words into {os.path.basename(HTML_PATH)}."
+          f"\ncheck CUT_N/CUT_WIN/CUT_LAM in the labeller still match N={N},WIN={WIN},lam={LAM}; reload the labeller (⌘R).")
+
+
 def _selftest():
     # learned model must beat uniform on a tiny 2-file set (train on one, test the other).
     import types
@@ -190,12 +210,15 @@ def _selftest():
 
 if __name__ == "__main__":
     import sys
-    if "--selftest" in sys.argv:
+    argv = sys.argv[1:]
+    folder = argv[argv.index("--folder") + 1] if "--folder" in argv else FOLDER
+    if "--selftest" in argv:
         _selftest()
-    elif "--train" in sys.argv:
-        words = load_words("/Users/ansuslov/Downloads/label_boxes")
-        w = train(words)
+    elif "--rebake" in argv:
+        rebake(folder)                                         # retrain + bake weights into the labeller
+    elif "--train" in argv:
+        w = train(load_words(folder))
         json.dump({"N": N, "WIN": WIN, "lam": LAM, "w": w.tolist()}, open(MODEL_PATH, "w"))
-        print(f"trained on {len(words)} words -> {MODEL_PATH} ({len(w)} weights)")
+        print(f"trained -> {MODEL_PATH} ({len(w)} weights)")
     else:
-        evaluate("/Users/ansuslov/Downloads/label_boxes")
+        evaluate(folder)
