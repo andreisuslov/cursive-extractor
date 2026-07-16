@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cursive labelling — sign in</title>
+<style>
+  body { font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; color: #1a1a1a; background: #fafafa; }
+  #card { max-width: 360px; margin: 72px auto 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 22px 26px 26px; }
+  h2 { margin: 0 0 2px; }
+  .muted { color: #666; } .ok { color: #2e7d32; font-weight: 600; } .bad { color: #b03030; font-weight: 600; }
+  kbd { background: #eee; border: 1px solid #ccc; border-radius: 3px; padding: 0 5px; font-size: 12px; }
+  label { display: block; margin: 14px 0 4px; font-weight: 600; }
+  input[type=text], input[type=password] { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid #bbb; border-radius: 6px; font: inherit; background: #fff; }
+  input:focus { outline: none; border-color: #1f77b4; box-shadow: 0 0 0 2px rgba(31,119,180,.15); }
+  button { padding: 6px 11px; border: 1px solid #bbb; border-radius: 6px; background: #f6f6f6; cursor: pointer; font: inherit; }
+  button:hover { background: #eee; }
+  button.on { background: #1f77b4; color: #fff; border-color: #1f77b4; width: 100%; margin-top: 18px; padding: 8px 11px; font-weight: 600; }
+  button.on:hover { background: #1a659a; }
+  button[disabled] { opacity: .6; cursor: default; }
+  #err { display: none; margin-top: 14px; padding: 8px 11px; border: 1px solid #e3b3b3; background: #fdf0f0; color: #b03030; border-radius: 6px; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="card">
+  <h2>Cursive labelling</h2>
+  <p class="muted" style="margin-top:0">Sign in with the username and password you were given. Press <kbd>⏎</kbd> to submit.</p>
+  <form id="f">
+    <label for="user">Username</label>
+    <input type="text" id="user" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus required />
+    <label for="pass">Password</label>
+    <input type="password" id="pass" name="password" autocomplete="current-password" required />
+    <button type="submit" id="go" class="on">Sign in</button>
+  </form>
+  <div id="err"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function showErr(msg){ const e = $("err"); e.textContent = msg; e.style.display = "block"; }
+function hideErr(){ $("err").style.display = "none"; }
+
+// only follow same-site relative paths from ?next= (never protocol-relative or absolute URLs)
+function destFor(role){
+  const next = new URLSearchParams(location.search).get("next");
+  if (next && next.startsWith("/") && !next.startsWith("//")) return next;
+  return role === "admin" ? "/cursive/admin" : "/cursive";
+}
+
+$("f").addEventListener("submit", async e => {
+  e.preventDefault();
+  hideErr();
+  const username = $("user").value.trim(), password = $("pass").value;
+  if (!username || !password) { showErr("Enter both a username and a password."); return; }
+  const btn = $("go"); btn.disabled = true; btn.textContent = "Signing in…";
+  try {
+    const r = await fetch("/cursive/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password })
+    });
+    let d = null; try { d = await r.json(); } catch (_e) {}
+    if (r.ok && d && d.ok) { location.href = destFor(d.role); return; }
+    if (r.status === 403) showErr("Wrong username or password (or the account has been disabled).");
+    else if (r.status === 429) showErr("Too many failed attempts — this address is blocked for a while. Wait 10 minutes and try again.");
+    else showErr((d && d.error) ? d.error : "Sign-in failed (HTTP " + r.status + "). Try again.");
+  } catch (_e) {
+    showErr("Couldn't reach the server — check your connection and try again.");
+  } finally {
+    btn.disabled = false; btn.textContent = "Sign in";
+  }
+});
+</script>
+</body>
+</html>

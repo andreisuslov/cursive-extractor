@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cursive labelling — admin</title>
+<style>
+  body { font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; color: #1a1a1a; }
+  #wrap { max-width: 1100px; margin: 0 auto; }
+  h2 { margin: 0; }
+  h3 { margin: 26px 0 8px; font-size: 15px; text-transform: uppercase; letter-spacing: .5px; color: #444; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+  button { padding: 6px 11px; border: 1px solid #bbb; border-radius: 6px; background: #f6f6f6; cursor: pointer; font: inherit; }
+  button:hover { background: #eee; } button.on { background: #1f77b4; color: #fff; border-color: #1f77b4; }
+  button[disabled] { opacity: .6; cursor: default; }
+  input, select { padding: 6px 8px; border: 1px solid #bbb; border-radius: 6px; font: inherit; background: #fff; }
+  input:focus, select:focus { outline: none; border-color: #1f77b4; box-shadow: 0 0 0 2px rgba(31,119,180,.15); }
+  .muted { color: #666; } .ok { color: #2e7d32; font-weight: 600; } .bad { color: #b03030; font-weight: 600; }
+  kbd { background: #eee; border: 1px solid #ccc; border-radius: 3px; padding: 0 5px; font-size: 12px; }
+  .sep { width: 1px; height: 24px; background: #ddd; margin: 0 4px; }
+  .bar { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; flex: 1; min-width: 120px; }
+  .barfill { height: 100%; background: #2e7d32; width: 0%; }
+  .card { border: 1px solid #ddd; border-radius: 6px; padding: 10px 12px; margin: 8px 0; background: #fff; }
+  .badge { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid transparent; }
+  .badge.act { background: #e6f2e6; color: #2e7d32; border-color: #bcd9bc; }
+  .badge.dis { background: #f7e6e6; color: #b03030; border-color: #e3b3b3; }
+  .badge.adm { background: #e4eef7; color: #1f77b4; border-color: #b9d3e8; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { border: 1px solid #ddd; padding: 5px 9px; text-align: left; white-space: nowrap; }
+  th { background: #f6f6f6; font-weight: 600; }
+  a { color: #1f77b4; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  #banner { display: none; position: sticky; top: 8px; z-index: 5; margin: 8px 0; padding: 8px 12px; border: 1px solid #e3b3b3; background: #fdf0f0; color: #b03030; border-radius: 6px; font-weight: 600; }
+  #banner button { float: right; padding: 0 8px; margin-left: 10px; }
+  .cred { border: 1px solid #bcd9bc; background: #f2f9f2; border-radius: 6px; padding: 10px 12px; margin: 8px 0; }
+  .cred pre { margin: 6px 0 0; padding: 8px 10px; background: #fff; border: 1px solid #ccc; border-radius: 6px; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+  #gate { display: none; max-width: 560px; margin: 80px auto; text-align: center; }
+  .tablewrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="row" style="justify-content:space-between">
+    <h2>Cursive labelling — admin</h2>
+    <span class="row" style="margin:0">
+      <span id="who" class="muted"></span>
+      <span id="meta" class="muted"></span>
+      <button id="refreshBtn" title="reloads the overview now (it also auto-refreshes every 30 s)">↻ refresh</button>
+      <button id="logout">Log out</button>
+    </span>
+  </div>
+  <div id="banner"><button id="bclose">✕</button><span id="bmsg"></span></div>
+  <div id="gate"><h2 class="bad">Admins only</h2><p class="muted">You are signed in, but this page needs an admin account. <a href="/cursive">Go to labelling</a> or log out and sign in as an admin.</p></div>
+
+  <div id="main" style="display:none">
+    <h3>Workers</h3>
+    <div id="oneTime"></div>
+    <div id="workers"></div>
+    <div id="admins" class="muted" style="margin-top:6px"></div>
+
+    <h3>Create user</h3>
+    <div class="card">
+      <div class="row" style="margin:0">
+        name <input id="cuName" placeholder="e.g. maria_k" autocapitalize="none" autocorrect="off" spellcheck="false" style="width:150px" title="lowercase letters, digits, _ and -, 2–32 chars" />
+        role <select id="cuRole"><option value="worker" selected>worker</option><option value="admin">admin</option></select>
+        password <input id="cuPw" class="mono" style="width:170px" autocomplete="off" />
+        <button id="cuGen" title="generate a random 16-character password">🎲 generate</button>
+        <button id="cuCreate" class="on">Create user</button>
+      </div>
+      <div id="createOut"></div>
+    </div>
+
+    <h3>Bulk assign</h3>
+    <div class="card">
+      <div class="row" style="margin:0">
+        assign the next <input type="number" id="bulkN" min="1" value="5" style="width:64px" /> unassigned pages to
+        <select id="bulkUser"></select>
+        <button id="bulkGo" class="on">Assign</button>
+        <span id="bulkMsg" class="muted"></span>
+      </div>
+    </div>
+
+    <h3>Pages</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>id</th><th>words</th><th>done</th><th>completed</th><th>assigned to</th><th>updated</th><th>links</th></tr></thead>
+        <tbody id="pagesBody"></tbody>
+      </table>
+    </div>
+    <p class="muted">“open” shows the live labelling page for that page (read it with your admin session); “download” fetches the raw doc.</p>
+  </div>
+</div>
+
+<script>
+const API = "/cursive/api/";
+const SIGNIN_URL = "https://andreisuslov.com/cursive";
+const $ = id => document.getElementById(id);
+let ov = null, me = null;
+
+function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+function banner(msg){ $("bmsg").textContent = msg; $("banner").style.display = "block"; }
+$("bclose").onclick = () => { $("banner").style.display = "none"; };
+
+// fetch wrapper: GET when body is undefined, JSON POST otherwise; 401 -> back to login
+async function jfetch(path, body){
+  const opt = body === undefined ? {} :
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  let d = null; try { d = await r.json(); } catch (_e) {}
+  if (r.status === 401) { location.href = "/cursive/login?next=" + encodeURIComponent("/cursive/admin"); throw new Error("not signed in"); }
+  if (!r.ok) throw new Error((d && d.error) || ("HTTP " + r.status));
+  return d;
+}
+
+function rel(iso){
+  if (!iso) return "never";
+  const t = new Date(iso).getTime();
+  if (!isFinite(t)) return String(iso);
+  const s = (Date.now() - t) / 1000;
+  if (s < 45) return "just now";
+  if (s < 3570) return Math.round(s / 60) + " min ago";
+  if (s < 84600) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " d ago";
+}
+
+function genPw(){
+  const A = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  const b = new Uint32Array(16); crypto.getRandomValues(b);
+  let s = ""; for (const v of b) s += A[v % A.length];
+  return s;
+}
+
+// clipboard: any <button class="copy" data-copy="..."> copies its payload
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest("button.copy");
+  if (!b) return;
+  const t = b.dataset.copy || "";
+  const done = () => { const old = b.textContent; b.textContent = "copied ✓"; setTimeout(() => { b.textContent = old; }, 1200); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, () => fallbackCopy(t, done));
+  else fallbackCopy(t, done);
+});
+function fallbackCopy(t, done){
+  const ta = document.createElement("textarea");
+  ta.value = t; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); done(); } catch (_e) { banner("Couldn't copy — select the text manually."); }
+  document.body.removeChild(ta);
+}
+
+function credBlock(title, lines){
+  const text = lines.join("\n");
+  return '<div class="cred"><b>' + esc(title) + '</b> <span class="muted">— shown once, copy it now</span> ' +
+    '<button class="copy" data-copy="' + esc(text) + '">copy</button>' +
+    '<pre>' + esc(text) + '</pre></div>';
+}
+
+function userOptions(selected){
+  let h = '<option value=""' + (!selected ? " selected" : "") + '>— unassigned —</option>';
+  for (const u of ov.users)
+    h += '<option value="' + esc(u.name) + '"' + (selected === u.name ? " selected" : "") + '>' + esc(u.name) + '</option>';
+  return h;
+}
+
+function workerCard(u){
+  const p = u.progress || {};
+  const wd = p.words_done || 0, wt = p.words_total || 0, pd = p.pages_done || 0, pt = p.pages_total || 0;
+  const pct = wt ? Math.round(100 * wd / wt) : 0;
+  const cur = u.current && u.current.page
+    ? '<span class="muted">on <b>' + esc(u.current.page) + '</b>' +
+      (typeof u.current.cursor === "number" ? ' · word ' + (u.current.cursor + 1) : '') + '</span>'
+    : '<span class="muted">idle</span>';
+  return '<div class="card">' +
+    '<div class="row" style="margin:0 0 6px">' +
+      '<b>' + esc(u.name) + '</b>' +
+      (u.active ? '<span class="badge act">active</span>' : '<span class="badge dis">disabled</span>') +
+      '<span class="muted">' + (u.assigned || []).length + ' pages assigned · last active ' + rel(u.last_active) + '</span>' +
+      cur +
+      '<span class="sep"></span>' +
+      '<button data-act="toggle" data-user="' + esc(u.name) + '">' + (u.active ? "disable" : "enable") + '</button>' +
+      '<button data-act="resetpw" data-user="' + esc(u.name) + '">reset password</button>' +
+    '</div>' +
+    '<div class="row" style="margin:0">' +
+      '<div class="bar"><div class="barfill" style="width:' + pct + '%"></div></div>' +
+      '<span class="muted">' + wd + '/' + wt + ' words · ' + pd + '/' + pt + ' pages</span>' +
+    '</div></div>';
+}
+
+function pageRow(p){
+  const short = p.id.length > 22 ? p.id.slice(0, 22) + "…" : p.id;
+  return '<tr>' +
+    '<td class="mono" title="' + esc(p.id) + '">' + esc(short) + '</td>' +
+    '<td>' + (p.words || 0) + '</td>' +
+    '<td>' + (p.done || 0) + '/' + (p.words || 0) + '</td>' +
+    '<td>' + (p.completed ? '<span class="ok">✓ complete</span>' : '<span class="muted">—</span>') + '</td>' +
+    '<td><select class="assign" data-page="' + esc(p.id) + '">' + userOptions(p.assigned_to || null) + '</select></td>' +
+    '<td class="muted">' + rel(p.updated) + '</td>' +
+    '<td><a href="/cursive?page=' + encodeURIComponent(p.id) + '" target="_blank" rel="noopener">open</a> · ' +
+        '<a href="/cursive/api/download/' + encodeURIComponent(p.id) + '">download</a></td>' +
+    '</tr>';
+}
+
+function render(){
+  if (!ov) return;
+  const workers = ov.users.filter(u => u.role !== "admin");
+  const admins = ov.users.filter(u => u.role === "admin");
+  $("workers").innerHTML = workers.length ? workers.map(workerCard).join("") : '<p class="muted">No workers yet — create one below.</p>';
+  $("admins").innerHTML = admins.length
+    ? 'Admins: ' + admins.map(a =>
+        '<span><b>' + esc(a.name) + '</b> <span class="badge adm">admin</span>' +
+        (a.active ? '' : ' <span class="badge dis">disabled</span>') +
+        ' <span class="muted">(last active ' + rel(a.last_active) + ')</span></span>').join(" · ")
+    : "";
+  $("workers").querySelectorAll("button[data-act]").forEach(b => { b.onclick = () => doAct(b.dataset.act, b.dataset.user); });
+
+  $("pagesBody").innerHTML = ov.pages.map(pageRow).join("");
+  $("pagesBody").querySelectorAll("select.assign").forEach(s => {
+    s.onchange = async () => {
+      try {
+        await jfetch(API + "admin/assign", { user: s.value || null, page_ids: [s.dataset.page] });
+        await refresh(true);
+      } catch (e) { banner("Assign failed: " + e.message); }
+    };
+  });
+
+  const bu = $("bulkUser"), keep = bu.value;
+  bu.innerHTML = ov.users.map(u => '<option value="' + esc(u.name) + '">' + esc(u.name) + '</option>').join("");
+  if (keep && ov.users.some(u => u.name === keep)) bu.value = keep;
+
+  const unassigned = ov.pages.filter(p => !p.assigned_to).length;
+  $("meta").textContent = ov.users.length + " users · " + ov.pages.length + " pages (" + unassigned + " unassigned)";
+}
+
+let busy = false;
+async function refresh(force){
+  if (busy) return;
+  // don't clobber a dropdown the admin is using mid-choice (auto-refresh only)
+  const ae = document.activeElement;
+  if (!force && ae && ae.tagName === "SELECT") return;
+  busy = true;
+  try { ov = await jfetch(API + "admin/overview"); render(); }
+  catch (e) { if (e.message !== "not signed in") banner("Refresh failed: " + e.message); }
+  finally { busy = false; }
+}
+$("refreshBtn").onclick = () => refresh(true);
+
+async function doAct(act, name){
+  const u = ov && ov.users.find(x => x.name === name);
+  if (!u) return;
+  try {
+    if (act === "toggle") {
+      if (u.active && !confirm("Disable " + name + "? Their sessions will be signed out.")) return;
+      await jfetch(API + "admin/users", { name: name, active: !u.active });
+      await refresh(true);
+    } else if (act === "resetpw") {
+      if (!confirm("Reset the password for " + name + "?")) return;
+      const pw = genPw();
+      await jfetch(API + "admin/users", { name: name, password: pw });
+      $("oneTime").innerHTML = credBlock("New password for " + name,
+        ["url:      " + SIGNIN_URL, "username: " + name, "password: " + pw]);
+      await refresh(true);
+    }
+  } catch (e) { banner(e.message); }
+}
+
+$("cuGen").onclick = () => { $("cuPw").value = genPw(); };
+$("cuCreate").onclick = async () => {
+  const name = $("cuName").value.trim(), role = $("cuRole").value, pw = $("cuPw").value;
+  if (!/^[a-z0-9_-]{2,32}$/.test(name)) { banner("Bad username — use 2–32 of a-z 0-9 _ - (lowercase)."); return; }
+  if (!pw) { banner("Set a password (🎲 generate makes a good one)."); return; }
+  try {
+    await jfetch(API + "admin/users", { name: name, password: pw, role: role });
+    $("createOut").innerHTML = credBlock("Sign-in info for " + name,
+      ["url:      " + SIGNIN_URL, "username: " + name, "password: " + pw]);
+    $("cuName").value = ""; $("cuPw").value = "";
+    await refresh(true);
+  } catch (e) { banner("Create failed: " + e.message); }
+};
+
+$("bulkGo").onclick = async () => {
+  const user = $("bulkUser").value, n = Math.max(1, parseInt($("bulkN").value, 10) || 0);
+  if (!user) { banner("Pick a user to assign pages to."); return; }
+  const ids = ov.pages.filter(p => !p.assigned_to).slice(0, n).map(p => p.id);
+  if (!ids.length) { $("bulkMsg").textContent = "no unassigned pages left"; return; }
+  try {
+    await jfetch(API + "admin/assign", { user: user, page_ids: ids });
+    $("bulkMsg").textContent = "assigned " + ids.length + " page" + (ids.length === 1 ? "" : "s") + " to " + user + " ✓";
+    await refresh(true);
+  } catch (e) { banner("Bulk assign failed: " + e.message); }
+};
+
+$("logout").onclick = async () => {
+  try { await jfetch(API + "logout", {}); } catch (_e) {}
+  location.href = "/cursive/login";
+};
+
+(async function init(){
+  try { me = await jfetch(API + "me"); }
+  catch (_e) { return; }                       // 401 already redirected to login
+  $("who").textContent = "signed in as " + me.name;
+  if (me.role !== "admin") { $("gate").style.display = "block"; return; }
+  $("main").style.display = "";
+  await refresh(true);
+  setInterval(() => refresh(false), 30000);
+})();
+</script>
+</body>
+</html>

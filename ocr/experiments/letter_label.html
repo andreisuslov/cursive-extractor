@@ -90,7 +90,7 @@
 const PAD=16, LBLH=40, HANDLE_HIT=10, SEG_HIT=8;
 // remote mode: when served from a server at /cursive, pages come from its API instead of local files
 const REMOTE = location.protocol.startsWith("http") && location.pathname.startsWith("/cursive");
-const remote = {token:null, id:null, list:[], idx:0, pageAsLoaded:null, dirty:false};
+const remote = {name:null, role:null, id:null, list:[], idx:0, pageAsLoaded:null, dirty:false};
 const GUIDE_BASE=0.62, GUIDE_UNIT=0.30;  // baseline sits 62% down the box; 1 baseline-unit = 30% of box height (box = a fixed ~3.3-unit lane)
 let words=[], i=0, page=new Image(), base={}, tool="move", drag=null, erasing=false;
 let undoStack=[], redoStack=[], sig=null, saveT=null, pageURL=null, wheelIdle=null;
@@ -176,9 +176,11 @@ function draw(){ ctx.clearRect(0,0,cv.width,cv.height); if(!words.length) return
   showCurFile(); scheduleSave(); }
 // persistent header indicator of the file being edited (name + whether ⌘S saves in place)
 function showCurFile(){ const el=$("curFile"); if(!el) return;
-  if(REMOTE){ if(!remote.id){ el.textContent="— connecting…"; el.style.color="#777"; el.title=""; return; }
-    el.textContent="— 🌐 "+remote.id+" (page "+(remote.idx+1)+"/"+(remote.list.length||1)+")  ·  ⌘S saves to the server";
-    el.style.color="#2e7d32"; el.title="your work is saved on the server (auto-saves too)"; return; }
+  if(REMOTE){ const who=remote.name?"  ·  signed in as "+remote.name:"";
+    if(!remote.id){ el.textContent="— connecting…"+who; el.style.color="#777"; el.title=""; }
+    else { el.textContent="— 🌐 "+remote.id+" (page "+(remote.idx+1)+"/"+(remote.list.length||1)+")  ·  ⌘S saves to the server"+who;
+      el.style.color="#2e7d32"; el.title="your work is saved on the server (auto-saves too)"; }
+    if(remote.name) el.appendChild(logoutEl()); return; }
   if(!pageURL){ el.textContent="— no file open"; el.style.color="#777"; el.title=""; return; }
   const name=(fileHandle&&fileHandle.name)||lastName||"(loaded)", inPlace=!!fileHandle;
   const pos = dirHandle ? " (file "+(dirIndex+1)+"/"+dirFiles.length+")" : "";
@@ -470,11 +472,25 @@ window.addEventListener("keydown",e=>{ if(!words.length) return;
   else if(e.key==="[") { e.preventDefault(); nudgeTilt(-0.5); } else if(e.key==="]") { e.preventDefault(); nudgeTilt(0.5); }
   else if(e.key==="\\") { e.preventDefault(); if(words.length){pushUndo(); words[i].angle=0; draw();} } });
 
-// --- remote mode implementation: load pages from /cursive/api, save back with the worker token ---
-function api(p){ return "/cursive/api/"+p+(p.includes("?")?"&":"?")+"t="+encodeURIComponent(remote.token); }
-async function remoteRefreshList(){ const r=await fetch(api("pages")); if(!r.ok) throw new Error("bad token");
+// --- remote mode implementation: session-cookie auth (login page sets the cookie); a ?t=<admin token>
+//     in the URL is still forwarded on every call for admin API power users.
+function api(p){ const u="/cursive/api/"+p, t=new URLSearchParams(location.search).get("t");
+  return t ? u+(p.includes("?")?"&":"?")+"t="+encodeURIComponent(t) : u; }
+function toLogin(){ location.href="/cursive/login?next="+encodeURIComponent(location.pathname+location.search); }
+let sessionGone=false;                                             // a later 401 = session expired: alert ONCE, then go sign in again
+function authExpired(){ if(!sessionGone){ sessionGone=true; alert("Your session has expired — please sign in again."); toLogin(); } return true; }
+let _logout=null;                                                  // small "log out" affordance appended to the #curFile header
+function logoutEl(){ if(!_logout){ _logout=document.createElement("span"); _logout.textContent="log out"; _logout.title="end this session";
+    _logout.style.cssText="margin-left:10px;color:#1f77b4;cursor:pointer;text-decoration:underline;font-size:13px";
+    _logout.onclick=async()=>{ try{ await fetch(api("logout"),{method:"POST"}); }catch(_e){} location.href="/cursive/login"; }; }
+  return _logout; }
+async function remoteRefreshList(){ const r=await fetch(api("pages"));
+  if(r.status===401) return authExpired();
+  if(!r.ok) throw new Error("pages "+r.status);
   const d=await r.json(); remote.list=d.pages||[]; }
 async function remoteLoad(id){ const r=await fetch(api("page/"+encodeURIComponent(id)));
+  if(r.status===401) return authExpired();
+  if(r.status===403){ $("saveState").textContent="page "+id+" isn't assigned to you — ask Andrei for access, or reload the tab for your next page."; return; }
   if(!r.ok){ alert("Couldn't load page "+id+" — try reloading the tab."); return; }
   const data=await r.json(); remote.id=id; remote.pageAsLoaded=data.page; remote.dirty=false;
   remote.idx=Math.max(0, remote.list.findIndex(p=>p.id===id));
@@ -486,28 +502,35 @@ async function remoteSave(){ if(!words.length||!remote.id) return;
   doc.completed = words.every(w=>w.done||w.skip);                  // a page is complete when every word is done/skipped
   try{ const r=await fetch(api("page/"+encodeURIComponent(remote.id)), {method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify(doc)});
+    if(r.status===401) return authExpired();
     if(!r.ok) throw new Error((await r.json()).error||r.status);
     if(doc.page) remote.pageAsLoaded=pageURL;
     remote.dirty=false;
     $("saveState").textContent="saved to server ✓ "+new Date().toLocaleTimeString()+(doc.completed?" — page complete":"");
   }catch(e){ $("saveState").textContent="⚠ save failed ("+e.message+") — work is still auto-saved in this browser; retry ⌘S"; } }
 async function remoteGoto(delta){ if(!remote.id) return;
-  await remoteSave();
+  await remoteSave(); if(sessionGone) return;
   await remoteRefreshList().catch(()=>{});
   if(delta<0){ const ni=Math.max(0,remote.idx-1); if(ni!==remote.idx) await remoteLoad(remote.list[ni].id); return; }
-  const r=await fetch(api("next?after="+encodeURIComponent(remote.id))); const d=await r.json();
+  const r=await fetch(api("next?after="+encodeURIComponent(remote.id))); if(r.status===401) return authExpired();
+  const d=await r.json();
   if(d.id) await remoteLoad(d.id);
   else { $("saveState").textContent="🎉 all pages are complete — thank you! Nothing left to label."; draw(); } }
 if(REMOTE){
   for(const id of ["openFile","openFolder","export"]) $(id).style.display="none";
   $("loadWrap").style.display="none";
-  remote.token=new URLSearchParams(location.search).get("t")||"";
-  const fail=msg=>{ document.body.innerHTML="<div style='max-width:560px;margin:80px auto;font:16px/1.6 -apple-system,sans-serif'><h2>"+msg+"</h2><p>Open the exact link you were given — it contains your personal access token after <code>?t=</code>. If it still fails, contact Andrei.</p></div>"; };
-  if(!remote.token) fail("Missing access token");
-  else remoteRefreshList()
-    .then(async()=>{ const r=await fetch(api("next")); const d=await r.json();
-      if(d.id) await remoteLoad(d.id); else $("saveState").textContent="🎉 all pages are complete — nothing to label."; })
-    .catch(()=>fail("Access denied"));
+  (async()=>{ try{
+    const r=await fetch(api("me"));
+    if(r.status===401){ toLogin(); return; }                       // not signed in -> login page (it sends you back here via ?next=)
+    if(!r.ok) throw new Error("me "+r.status);
+    const me=await r.json(); remote.name=me.name; remote.role=me.role; showCurFile();
+    await remoteRefreshList(); if(sessionGone) return;
+    const want=new URLSearchParams(location.search).get("page");   // ?page=<id>: open exactly that page (admin reviewing a worker's
+    if(want){ await remoteLoad(want); return; }                    // live page); finishing it falls back to the normal next-page flow
+    const rn=await fetch(api("next")); if(rn.status===401) return authExpired();
+    const d=await rn.json();
+    if(d.id) await remoteLoad(d.id); else $("saveState").textContent="🎉 all pages are complete — nothing to label.";
+  }catch(e){ if(!sessionGone) $("saveState").textContent="⚠ couldn't reach the server ("+e.message+") — reload the tab to retry"; } })();
   setInterval(()=>{ if(remote.id && remote.dirty && words.length) remoteSave(); }, 90000);  // safety-net autosave
 }
 draw();
