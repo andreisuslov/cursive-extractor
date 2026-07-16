@@ -173,9 +173,10 @@ class Handler(BaseHTTPRequestHandler):
         return who
 
     def log_message(self, fmt: str, *args) -> None:  # quiet default logger; one line per request
+        line = re.sub(r"([?&]t=)[^&\s\"]+", r"\1***", fmt % args)  # never log auth tokens
         print(
             f"{datetime.datetime.now(tz=datetime.UTC).isoformat(timespec='seconds')} "
-            f"{self.address_string()} {fmt % args}",
+            f"{self.address_string()} {line}",
             flush=True,
         )
 
