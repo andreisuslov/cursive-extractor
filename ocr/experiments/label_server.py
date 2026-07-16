@@ -210,6 +210,7 @@ class Auth:
     def _write(self, name: str, obj: dict) -> None:
         tmp = self.root / f".{name}.tmp"
         tmp.write_text(json.dumps(obj))
+        tmp.chmod(0o600)  # holds password hashes / raw session ids -- owner-only
         tmp.replace(self.root / f"{name}.json")
 
     @staticmethod
@@ -868,6 +869,11 @@ def _selftest() -> None:
                 raise AssertionError("traversal must not succeed")
             except urllib.error.HTTPError as e:
                 assert e.code == 404
+            # auth files (password hashes / raw session ids) must be owner-only
+            for f in ("users.json", "sessions.json"):
+                mode = (root / "data" / f).stat().st_mode & 0o777
+                assert mode == 0o600, f"{f} must be 0600, got {oct(mode)}"
+
             httpd.shutdown()
 
         # logs must never contain passwords, session ids, or tokens
