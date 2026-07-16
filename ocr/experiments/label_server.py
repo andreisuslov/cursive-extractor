@@ -149,6 +149,45 @@ class Store:
         with self.lock:
             (self.pages / f"{page_id}.json").write_text(json.dumps(doc))
 
+    def set_completed(self, page_id: str, completed: bool, worker: str) -> None:
+        """Admin toggle of a page's completed flag, recorded as a normal versioned save."""
+        doc = self.load(page_id)
+        if doc is None:
+            raise KeyError(page_id)
+        doc["completed"] = completed
+        self.save(page_id, doc, worker)
+
+    def _trash(self, page_id: str, *paths: Path) -> None:
+        """Move files/dirs into trash/<utc>_<page_id>/ — bulk actions never hard-delete."""
+        dest = (
+            self.root
+            / "trash"
+            / (datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%dT%H%M%SZ") + f"_{page_id}")
+        )
+        for p in paths:
+            if p.exists():
+                dest.mkdir(parents=True, exist_ok=True)
+                p.replace(dest / p.name)
+
+    def reset(self, page_id: str) -> None:
+        """Discard all worker edits: the page reverts to its seed (edits go to trash/)."""
+        if not (self.pages / f"{page_id}.json").exists():
+            raise KeyError(page_id)
+        with self.lock:
+            self._trash(page_id, self.current / f"{page_id}.json", self.saves / page_id)
+
+    def delete(self, page_id: str) -> None:
+        """Remove the page from the portal entirely (seed + edits go to trash/)."""
+        if not (self.pages / f"{page_id}.json").exists():
+            raise KeyError(page_id)
+        with self.lock:
+            self._trash(
+                page_id,
+                self.pages / f"{page_id}.json",
+                self.current / f"{page_id}.json",
+                self.saves / page_id,
+            )
+
 
 class Auth:
     """Users, sessions, assignments, activity — small JSON files under DATA, created on demand.
@@ -518,6 +557,30 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(400, "no such user")
             self.app.auth.assign(user, pids)
             return self._json(200, {"ok": True})
+        if path == "/cursive/api/admin/pages":
+            if role != "admin":
+                return self._err(403, "admin only")
+            action, pids = doc.get("action"), doc.get("page_ids")
+            if not isinstance(pids, list) or not all(
+                isinstance(p, str) and PAGE_ID_RE.match(p) for p in pids
+            ):
+                return self._err(400, "page_ids must be a list of page ids")
+            if action not in ("complete", "reopen", "reset", "delete"):
+                return self._err(400, "unknown action")
+            try:
+                for pid in pids:
+                    if action == "complete":
+                        self.app.store.set_completed(pid, True, name)
+                    elif action == "reopen":
+                        self.app.store.set_completed(pid, False, name)
+                    elif action == "reset":
+                        self.app.store.reset(pid)
+                    else:  # delete: also drop the assignment so it leaves worker scopes
+                        self.app.store.delete(pid)
+                        self.app.auth.assign(None, [pid])
+            except KeyError as e:
+                return self._err(404, f"no such page: {e.args[0]}")
+            return self._json(200, {"ok": True, "count": len(pids)})
         m = re.match(r"^/cursive/api/(page|seed)/([^/]+)$", path)
         if not m or not PAGE_ID_RE.match(m.group(2)):
             return self._err(404, "unknown endpoint")
@@ -738,6 +801,31 @@ def _selftest() -> None:
             assert req("POST", "/cursive/api/admin/assign?t=AAA",
                        {"user": "ghost", "page_ids": ["p2"]})[0] == 400  # fmt: skip
 
+            # bulk page actions: complete/reopen (versioned), reset (trash edits), delete
+            pa = "/cursive/api/admin/pages?t=AAA"
+            wk_act = {"action": "complete", "page_ids": ["p2"]}
+            assert req("POST", "/cursive/api/admin/pages", wk_act, ck(sid_a))[0] == 403, "not admin"
+            assert req("POST", pa, {"action": "levitate", "page_ids": ["p2"]})[0] == 400
+            assert req("POST", pa, {"action": "complete", "page_ids": ["nope"]})[0] == 404
+            assert req("POST", pa, {"action": "complete", "page_ids": ["p2", "p3"]})[0] == 200
+            code, body, _ = req("GET", "/cursive/api/admin/overview?t=AAA")
+            comp = {p["id"]: p["completed"] for p in body["pages"]}
+            assert comp["p2"] and comp["p3"], "bulk complete"
+            assert req("POST", pa, {"action": "reopen", "page_ids": ["p3"]})[0] == 200
+            code, body, _ = req("GET", "/cursive/api/admin/overview?t=AAA")
+            comp = {p["id"]: p["completed"] for p in body["pages"]}
+            assert comp["p2"] and not comp["p3"], "reopen undoes complete"
+            assert (root / "data" / "saves" / "p2").exists(), "admin toggle is versioned"
+            assert req("POST", pa, {"action": "reset", "page_ids": ["p1"]})[0] == 200
+            code, body, _ = req("GET", "/cursive/api/page/p1?t=AAA")
+            assert body.get("savedBy") is None, "reset reverts to the pristine seed"
+            assert list((root / "data" / "trash").glob("*_p1/*")), "reset edits land in trash"
+            assert req("POST", pa, {"action": "delete", "page_ids": ["p3"]})[0] == 200
+            code, body, _ = req("GET", "/cursive/api/admin/overview?t=AAA")
+            assert [p["id"] for p in body["pages"]] == ["p1", "p2"], "deleted page gone"
+            assert req("GET", "/cursive/api/page/p3?t=AAA")[0] == 404
+            assert list((root / "data" / "trash").glob("*_p3/p3.json")), "deleted seed in trash"
+
             # user update (password change), then disable kills sessions + login
             assert req("POST", new_users, {"name": "alice", "password": "pw-two"})[0] == 200
             assert login("alice", "pw-alice")[0] == 403, "old password dead"
@@ -755,7 +843,7 @@ def _selftest() -> None:
 
             # legacy admin token still works everywhere
             code, body, _ = req("GET", "/cursive/api/pages?t=AAA")
-            assert code == 200 and body["who"] == "admin" and len(body["pages"]) == 3
+            assert code == 200 and body["who"] == "admin" and len(body["pages"]) == 2  # p3 deleted
             assert req("GET", "/cursive/api/me?t=AAA")[1] == {"name": "admin", "role": "admin"}
             assert req("GET", "/cursive/api/download/p1?t=AAA")[0] == 200
             assert req("GET", "/cursive/api/download/p1")[0] == 401

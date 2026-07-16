@@ -81,13 +81,30 @@
     </div>
 
     <h3>Pages</h3>
+    <div class="card" id="selBar">
+      <div class="row" style="margin:0">
+        <b id="selCount">0 selected</b>
+        <span class="sep"></span>
+        assign to <select id="selUser"></select>
+        <button id="aAssign">Assign</button>
+        <button id="aUnassign">Unassign</button>
+        <span class="sep"></span>
+        <button id="aComplete" title="mark the selected pages complete (workers stop being served them)">✓ mark complete</button>
+        <button id="aReopen" title="undo the complete status — the pages go back into their workers' queues">↺ reopen</button>
+        <span class="sep"></span>
+        <button id="aReset" title="discard ALL worker edits on the selected pages — they revert to the original seed (edits are kept in a trash folder on the server)">reset to seed</button>
+        <button id="aDelete" title="remove the selected pages from the portal (moved to a trash folder on the server, recoverable)">🗑 delete</button>
+        <button id="aClear">clear selection</button>
+      </div>
+    </div>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>id</th><th>words</th><th>done</th><th>completed</th><th>assigned to</th><th>updated</th><th>links</th></tr></thead>
+        <thead><tr><th><input type="checkbox" id="selAll" title="select / deselect all pages" /></th><th>id</th><th>words</th><th>done</th><th>completed</th><th>assigned to</th><th>updated</th><th>links</th></tr></thead>
         <tbody id="pagesBody"></tbody>
       </table>
     </div>
-    <p class="muted">“open” shows the live labelling page for that page (read it with your admin session); “download” fetches the raw doc.</p>
+    <p class="muted">“open” shows the live labelling page for that page (read it with your admin session); “download” fetches the raw doc.
+      Tick pages (or the header box for all) and use the actions bar above the table.</p>
   </div>
 </div>
 
@@ -96,6 +113,7 @@ const API = "/cursive/api/";
 const SIGNIN_URL = "https://andreisuslov.com/cursive";
 const $ = id => document.getElementById(id);
 let ov = null, me = null;
+const selected = new Set();   // page ids ticked in the table (survives auto-refresh re-renders)
 
 function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
@@ -189,6 +207,8 @@ function workerCard(u){
 function pageRow(p){
   const short = p.id.length > 22 ? p.id.slice(0, 22) + "…" : p.id;
   return '<tr>' +
+    '<td><input type="checkbox" class="sel" data-page="' + esc(p.id) + '"' +
+      (selected.has(p.id) ? ' checked' : '') + ' /></td>' +
     '<td class="mono" title="' + esc(p.id) + '">' + esc(short) + '</td>' +
     '<td>' + (p.words || 0) + '</td>' +
     '<td>' + (p.done || 0) + '/' + (p.words || 0) + '</td>' +
@@ -213,6 +233,10 @@ function render(){
     : "";
   $("workers").querySelectorAll("button[data-act]").forEach(b => { b.onclick = () => doAct(b.dataset.act, b.dataset.user); });
 
+  // prune selections for pages that no longer exist (e.g. after delete)
+  const ids = new Set(ov.pages.map(p => p.id));
+  for (const id of [...selected]) if (!ids.has(id)) selected.delete(id);
+
   $("pagesBody").innerHTML = ov.pages.map(pageRow).join("");
   $("pagesBody").querySelectorAll("select.assign").forEach(s => {
     s.onchange = async () => {
@@ -222,6 +246,14 @@ function render(){
       } catch (e) { banner("Assign failed: " + e.message); }
     };
   });
+  $("pagesBody").querySelectorAll("input.sel").forEach(c => {
+    c.onchange = () => { c.checked ? selected.add(c.dataset.page) : selected.delete(c.dataset.page); selSync(); };
+  });
+
+  const su = $("selUser"), keepSu = su.value;
+  su.innerHTML = ov.users.map(u => '<option value="' + esc(u.name) + '">' + esc(u.name) + '</option>').join("");
+  if (keepSu && ov.users.some(u => u.name === keepSu)) su.value = keepSu;
+  selSync();
 
   const bu = $("bulkUser"), keep = bu.value;
   bu.innerHTML = ov.users.map(u => '<option value="' + esc(u.name) + '">' + esc(u.name) + '</option>').join("");
@@ -276,6 +308,49 @@ $("cuCreate").onclick = async () => {
     await refresh(true);
   } catch (e) { banner("Create failed: " + e.message); }
 };
+
+// --- bulk selection actions -------------------------------------------
+function selSync(){
+  const n = selected.size;
+  $("selCount").textContent = n + " selected";
+  for (const id of ["aAssign", "aUnassign", "aComplete", "aReopen", "aReset", "aDelete", "aClear"])
+    $(id).disabled = !n;
+  const boxes = [...document.querySelectorAll("input.sel")];
+  $("selAll").checked = boxes.length > 0 && boxes.every(c => c.checked);
+}
+$("selAll").onchange = () => {
+  document.querySelectorAll("input.sel").forEach(c => {
+    c.checked = $("selAll").checked;
+    c.checked ? selected.add(c.dataset.page) : selected.delete(c.dataset.page);
+  });
+  selSync();
+};
+$("aClear").onclick = () => { selected.clear(); document.querySelectorAll("input.sel").forEach(c => { c.checked = false; }); selSync(); };
+async function bulkAct(action){
+  const ids = [...selected];
+  if (!ids.length) return;
+  const label = ids.length + " page" + (ids.length === 1 ? "" : "s");
+  try {
+    if (action === "assign") {
+      const user = $("selUser").value;
+      if (!user) { banner("Pick a user to assign to."); return; }
+      await jfetch(API + "admin/assign", { user: user, page_ids: ids });
+    } else if (action === "unassign") {
+      await jfetch(API + "admin/assign", { user: null, page_ids: ids });
+    } else {
+      if (action === "reset" && !confirm("Reset " + label + " to their original seed? All worker edits on them move to the server's trash folder.")) return;
+      if (action === "delete" && !confirm("Delete " + label + " from the portal? They move to the server's trash folder (recoverable by hand).")) return;
+      await jfetch(API + "admin/pages", { action: action, page_ids: ids });
+    }
+    await refresh(true);
+  } catch (e) { banner(action + " failed: " + e.message); }
+}
+$("aAssign").onclick = () => bulkAct("assign");
+$("aUnassign").onclick = () => bulkAct("unassign");
+$("aComplete").onclick = () => bulkAct("complete");
+$("aReopen").onclick = () => bulkAct("reopen");
+$("aReset").onclick = () => bulkAct("reset");
+$("aDelete").onclick = () => bulkAct("delete");
 
 $("bulkGo").onclick = async () => {
   const user = $("bulkUser").value, n = Math.max(1, parseInt($("bulkN").value, 10) || 0);
