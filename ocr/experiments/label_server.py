@@ -379,8 +379,15 @@ class Handler(BaseHTTPRequestHandler):
         return ""
 
     def _whoami(self) -> tuple[str, str, str] | None:
-        """(name, role, via) where via is 'token' or 'cookie', else None."""
-        tok = parse_qs(urlparse(self.path).query).get("t", [""])[0]
+        """(name, role, via) where via is 'token' or 'cookie', else None.
+
+        The admin token is read from the Authorization header first — query strings end up in
+        proxy/tunnel access logs, which this server's own log redaction cannot reach. ?t= stays
+        supported for existing scripts and bookmarks.
+        """
+        auth = self.headers.get("Authorization", "")
+        tok = auth[7:] if auth.lower().startswith("bearer ") else ""
+        tok = tok or parse_qs(urlparse(self.path).query).get("t", [""])[0]
         if tok and self.app.admin and hmac.compare_digest(tok, self.app.admin):
             return "admin", "admin", "token"
         got = self.app.auth.session(self._cookie_sid())
@@ -850,6 +857,20 @@ def _selftest() -> None:
             assert req("GET", "/cursive/api/download/p1")[0] == 401
             assert req("GET", "/cursive/api/admin/overview?t=AAA")[0] == 200
             assert req("POST", "/cursive/api/page/nope?t=AAA", save)[0] == 404
+
+            # Authorization: Bearer — preferred over ?t= so the token stays out of proxy logs
+            bear = {"Authorization": "Bearer AAA"}
+            assert req("GET", "/cursive/api/me", headers=bear)[1] == {
+                "name": "admin",
+                "role": "admin",
+            }
+            assert req("GET", "/cursive/api/download/p1", headers=bear)[0] == 200
+            assert req("POST", "/cursive/api/seed/p_bearer", seed, headers=bear)[0] == 200
+            bad = {"Authorization": "Bearer WRONG"}
+            assert req("GET", "/cursive/api/me", headers=bad)[0] == 401
+            assert req("GET", "/cursive/api/me", headers={"Authorization": "AAA"})[0] == 401
+            assert req("POST", "/cursive/api/admin/pages?t=AAA",
+                       {"action": "delete", "page_ids": ["p_bearer"]})[0] == 200  # fmt: skip
 
             # login rate limit: 5 failures -> 429 for that ip; injectable clock, no sleeping
             rl = {"Cf-Connecting-Ip": "10.9.9.9"}

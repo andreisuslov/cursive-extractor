@@ -137,12 +137,13 @@ def api(path: str, payload: dict | None = None) -> dict:
     token = os.environ.get("CURSIVE_ADMIN_TOKEN")
     if not token:
         raise SystemExit("set CURSIVE_ADMIN_TOKEN (envchain cursive)")
-    url = f"{BASE}/cursive/api/{path}{'&' if '?' in path else '?'}t={token}"
+    # token goes in a header, never the query string: URLs are logged by proxies and the
+    # cloudflared tunnel, which the server's own log redaction cannot reach.
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(
-        url,
+        f"{BASE}/cursive/api/{path}",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         method="POST" if data else "GET",
     )
     with urllib.request.urlopen(req, timeout=120) as r:
