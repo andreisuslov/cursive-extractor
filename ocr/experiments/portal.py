@@ -143,7 +143,12 @@ def api(path: str, payload: dict | None = None) -> dict:
     req = urllib.request.Request(
         f"{BASE}/cursive/api/{path}",
         data=data,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+        # Cloudflare 403s the default Python-urllib UA, so send our own
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "cursive-portal/1.0",
+        },
         method="POST" if data else "GET",
     )
     with urllib.request.urlopen(req, timeout=120) as r:
