@@ -9,6 +9,85 @@ Newest entries first. Dates are absolute.
 
 ---
 
+## 2026-07-24 — autonomous vision labelling: a labour multiplier, not a labeller
+
+Asked the question directly: **can the labelling be done with no human at all?** Ran a fleet of
+vision agents over two real diary pages (693 words) and measured it honestly. Answer: it produces
+a usable *first pass* for ~30% of a page and fixes the box-misalignment poison wholesale, but it
+does **not** produce training-grade cuts, and it still needs human confirmation.
+
+**The setup.** Per word an agent renders the box with 40% context and a box-local pixel ruler,
+judges whether the box actually contains its word, *corrects the box in page coords* if not, then
+places `len(text)-1` cuts at the ligatures. Every proposal is then re-rendered as captioned
+per-letter tiles and adversarially judged by a second agent with an explicit
+**default-to-fail** rule (a wrong accepted label poisons training data; a rejected good one just
+returns to the human queue). Only survivors get `done: true`.
+
+**Results (zero human input).**
+
+| | page 1 | page 2 |
+|---|---|---|
+| words | 233 | 460 |
+| boxes auto-realigned | 194 | 383 |
+| unfixable (mismatch/unreadable) | 2 | 31 |
+| accepted after all gates | **88 (38%)** | **123 (27%)** |
+
+577/693 Gemini boxes were wrong and got corrected automatically — that is the single biggest win,
+since box/label misalignment was the real poison in the InkSight postmortem. Cost is ~3-5M subagent
+tokens and 1-1.5h per page, and long runs hit session/model limits: **resume from the workflow's
+`journal.jsonl` and package the results yourself** rather than trusting a final packaging agent
+(both runs lost their packager to a limit; nothing else was lost).
+
+**The verifier blind spot (found by spot-checking, then fixed).** Judging slice tiles *in isolation*
+cannot see a vertically wrong box: a box two line-pitches tall gives every tile some ink and sails
+through, while actually swallowing the lines above and below (p2 "Chief"). Fix = a cheap geometric
+pre-filter feeding a context-aware agent judge that sees the box drawn amid its neighbours
+(`auto_label/render.py ctx`). Of 109 flagged words: **68 keep, 33 fix, 8 reject — and only 14/33
+fixes survived re-verification.** "Chief" was repaired, failed the slice gate, and was correctly
+demoted. Two "keep" overrides were checked by hand and were right, so the filter over-flags by
+design and the agent, not the geometry, is the verdict.
+
+Two wrong ways to find text lines here, both tried:
+- **Cluster boxes into rows by y-centre.** Handwritten lines *slope*, so single-linkage chains them:
+  13 bogus "rows" with pitch varying 46-200px, and `rows=0` for nearly every word. The unit test
+  on a tidy synthetic grid passed — only real data exposed it.
+- **Require a neighbour's centre inside the box.** Too strict: a two-pitch-tall box eats the
+  *descenders above and ascenders below* without containing either line's centre, so it missed
+  "Chief" entirely.
+
+What works (`ocr/experiments/box_linecheck.py`): flag a box when it covers **>=35% of a
+horizontally-overlapping neighbour's height**. Deliberately generous (35% of p1 and 53% of p2
+accepts flagged, false alarms included) because it is a pre-filter, never a verdict.
+
+**Honest negative, measured twice.** Auto labels make the `cut_predictor` rebake *worse* on human
+ground truth (controlled leave-one-file-out, identical human eval set):
+
+| training data | MAE/bh | within .25·bh |
+|---|---|---|
+| human only (71 words) | **0.150** | **84.4%** |
+| + 96 raw auto | 0.159 | 82.8% |
+| + 211 repaired auto | 0.166 | 81.5% |
+
+Box repair did **not** rescue it — more auto data made it slightly worse. The bottleneck is cut
+*precision*, not box alignment: auto cuts land a few px off, and a model trained to hit human
+precision is degraded by them. Auto docs were removed from `~/Downloads/label_boxes/` and the
+model re-baked human-only (back to 0.150 / 84.4%). **Keep auto labels out of that folder.**
+
+**Where this leaves the goal.** The autonomous pipeline is a *labour multiplier*: ~30% of a page
+arrives pre-cut with corrected boxes, and humans work a smaller pre-filtered queue. It is not a
+source of training data, and two independent gates missed "Chief" before a third caught it — so
+accepts still need a human confirm. The N2 blocker stands: **clean per-letter supply still requires
+human cuts**, now with a ~30% head start per page.
+
+Artifacts: `ocr/experiments/auto_label/` (`render.py` crop/slices/ctx renderer, `triage_page.js`,
+`repair_boxes.js`), `ocr/experiments/box_linecheck.py` (+ tests). Per-page output is
+`outputs/<slug>/page_<NNN>/labels_auto.json` in portal format — `done: true` only for accepted
+words; `labels_corrected.json` is never touched.
+
+**Gotcha found on the way:** page_001's `labels_corrected.json` has only **1 of 233** words with
+`done: true` — the other 232 are untouched auto-proposals with evenly-spaced cuts through blank
+paper. It was never 233 human labels; the human labelling had barely started.
+
 ## 2026-06-30 — labeller eraser: clip to working area + attach dabs to the image
 
 Two eraser fixes. (1) **Clip** the paper-colour dabs to the crop rect in `draw()` so they no longer

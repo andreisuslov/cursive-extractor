@@ -24,7 +24,7 @@ Concretely, end to end:
 | 1 | Acquire | page images from a scan/PDF | ✅ working (`scraper/`, page render) |
 | 2 | Detect + transcribe | word boxes + the text of each (so we know which letters to expect) | ✅ working (Gemini grounded, ~94% vs truth) |
 | 3 | Recover clean pen strokes per word | ordered `(x,y,pen)` (now also width/intensity) | ✅ **solved in principle** via InkSight derendering (built; needs GPU to run at scale) |
-| 4 | Segment words → **labelled letters** | each letter cut out + told which letter it is | ⚠️ **partial — the hard bottleneck.** ~85–91% per page by geometry; cut quality is the wall (see CHANGELOG M10–M13, several honest negatives). Not yet reliable. |
+| 4 | Segment words → **labelled letters** | each letter cut out + told which letter it is | ⚠️ **partial — the hard bottleneck.** ~85–91% per page by geometry; cut quality is the wall (see CHANGELOG M10–M13, several honest negatives). Not yet reliable. Agents auto-label ~30%/page and fix most boxes (M16), but their cuts are not training-grade. |
 | 5 | Cluster → **≥3 variants per letter** | per-writer allograph library | ⚠️ partial — prototype exists (M12); gated entirely on stage 4 |
 | 6 | Build the **dynamic font** | OpenType (or renderer) with randomized alternates + joins | ❌ not started |
 | 7 | Render text in the person's hand | typed text → handwriting image/vector | ❌ not started |
@@ -87,6 +87,13 @@ as items land (the matching detail lives in `WORKLOG.md`).
   + geometric + recognition gates all fail). **Built path: human-in-the-loop** (`_letter_review.py`
   + `letter_review.html`) — fastest route to a clean alphabet for one writer. Backend proven on
   clean letters (`font_backend_demo.png`); needs the user to run pages through the review tool.
+- [x] **N7 — Can agents label it with no human?** Tested on 693 real words (CHANGELOG M16,
+  WORKLOG 2026-07-24). **Partly: ~30% of a page accepted with zero human input** (p1 88/233,
+  p2 123/460) and **577/693 misaligned boxes auto-corrected** — the box/label misalignment that
+  poisoned earlier attempts is now largely an automatable problem. **But** the auto cuts *degrade*
+  the cut-predictor vs human ground truth (0.150 → 0.166 MAE/bh) even after box repair, and two
+  independent gates still passed a box that swallowed its neighbouring lines. So: **labour
+  multiplier for the portal, not a labeller and not training data.** Human cuts remain the supply.
 
 **Decisions to make**
 - [ ] **D1 — Font tech:** real OpenType randomized alternates vs a custom SVG/stroke renderer
@@ -105,6 +112,9 @@ as items land (the matching detail lives in `WORKLOG.md`).
 
 - Does cutting the clean InkSight trajectory actually beat cutting raw ink at stage 4? (the
   whole middle hinges on this — untested.)
+- Can auto-labelled words be made *precise* enough to train on (sub-pixel cut refinement, or
+  snapping agent cuts to the nearest ink minimum)? Today they are consistently a few px off, which
+  is exactly what makes them useless as training data (M16).
 - Font tech: real OpenType with randomized alternates, or a custom SVG/stroke renderer that
   picks variants + draws joins? OpenType is portable; a renderer is more flexible for joins.
 - Do we keep the neural transformer at all, or only as a gap-filler for rare letters?

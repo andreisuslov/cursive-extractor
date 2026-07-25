@@ -35,6 +35,14 @@ between-letter cuts in-browser, beating uniform spacing leave-one-file-out (**0.
 84% vs 80% within 0.25·bh** on 64 cut-words). The lever remains *more data* (esp. more writers); the
 labeller makes gathering it fast. See M15.
 
+**Autonomous labelling update (2026-07-24).** Tested whether the labelling can be done with **no human
+at all**: vision-agent fleets over 693 real words accept **~30% of a page** (p1 88/233, p2 123/460)
+after an adversarial default-to-fail gate, and auto-correct **577/693** misaligned detection boxes —
+the misalignment that poisoned earlier attempts. But the auto cuts **degrade** the cut-predictor
+against human ground truth (0.150 → 0.166 MAE/bh), even after box repair, so they are a *labour
+multiplier for the portal, not training data*. The N2 blocker stands: clean per-letter supply still
+needs human cuts — now with a ~30% head start per page. See M16.
+
 > Companion doc: **`WORKLOG.md`** records the *why* and the *results* (decision-making);
 > this file records the *what-shipped* (implemented changes).
 
@@ -220,3 +228,49 @@ cuts back in the tool. This is the flywheel M10–M13 kept pointing at — *more
 - Since the transcript gives the letter count, framed cutting as "place L−1 boundaries". Uniform-by-count is a strong baseline (**0.187 MAE/bh, 79.5% within 0.25·bh**). Per-letter width models and hand-built ink-valley heuristics (even slant-aware) **do not beat it**.
 - A **learned per-column boundary model** does: slant-aware ink profile → weighted logistic → DP with an even-spacing prior = **0.163 MAE/bh, 84.2% within 0.25·bh**, leave-one-file-out on 64 cut-words. Modest but real, and it grows with data. Module trains/evals/saves weights with a selftest.
 - **Ported into the labeller**: the **✂ propose cuts** button (`p`) runs the model in-browser (slant profile + logistic + DP, weights baked from `cut_model.json`, both numeric cores verified bit-identical to Python), falling back to uniform if the crop can't be read. `--rebake` refreshes the baked weights as more cuts accumulate.
+
+## M16 — Autonomous vision labelling: 30% of a page with no human, and a hard negative on using it
+
+Answered "can this be labelled with no human at all?" by running fleets of vision agents over two
+real diary pages (693 words) and measuring the result honestly. It yields a **usable first pass for
+~30% of a page** and **auto-corrects 577/693 misaligned detection boxes** — but its cuts are *not*
+training-grade, and its accepts still need a human confirm. Full reasoning, the two dead ends, and
+every number are in `WORKLOG.md` (2026-07-24).
+
+**Pipeline (`ocr/experiments/auto_label/`).**
+- `render.py` — the view agents share, run as `python3 -m ocr.experiments.auto_label.render <cmd>`:
+  `crop` (box + 40% context + **box-local pixel ruler**, so an agent can express a box correction
+  numerically), `slices` (cut lines over the crop + each slice as a tile captioned with the letter it
+  would be labelled), `ctx` (the box as a green rectangle **amid its blue neighbours** — the view that
+  makes line-straddling obvious). Page selected by `WORDTOOL_PAGE`, dataset by `WORDTOOL_SLUG`;
+  renders land in the git-ignored `outputs/<slug>/page_<NNN>/_render/`.
+- `triage_page.js` — per word: verify the box, **correct it in page coords**, propose `len(text)-1`
+  cuts; each batch flows straight into an adversarial per-slice judge with an explicit
+  **default-to-fail** rule. Only survivors get `done: true`.
+- `repair_boxes.js` — second-stage judge for boxes a geometric filter flags as possibly swallowing a
+  neighbouring line: keep / fix (new box + fresh cuts) / reject, with repaired cuts re-verified.
+- Output is `outputs/<slug>/page_<NNN>/labels_auto.json` in portal format; `labels_corrected.json`
+  is never touched.
+
+**`ocr/experiments/box_linecheck.py`** — flags a box that covers **>=35% of a horizontally-overlapping
+neighbour's height**. Deliberately generous: it is a cheap pre-filter feeding the agent judge, never a
+verdict. Two obvious alternatives are *wrong on this data* and both were tried: clustering boxes into
+rows by y-centre (handwritten lines slope → single-linkage chains them into 13 bogus rows), and
+requiring a neighbour's centre inside the box (a two-line-pitch-tall box eats descenders above and
+ascenders below without containing either centre). Tested in `tests/test_box_linecheck.py`.
+
+**Results, zero human input:** page 1 **88/233 accepted (38%)**, page 2 **123/460 (27%)**; 194 and 383
+boxes auto-realigned; 2 and 31 unfixable. The repair pass judged 109 flagged accepts → 68 keep,
+33 fix, 8 reject, with **only 14/33 fixes surviving re-verification** (the known-bad "Chief" was
+repaired, failed the slice gate, and was correctly demoted).
+
+**Negative result — do not train on these labels.** Adding auto labels to the `cut_predictor` rebake
+*degrades* it against human ground truth (controlled LOFO, identical human eval set): human-only
+**0.150 MAE/bh / 84.4%** → +96 raw auto **0.159 / 82.8%** → +211 *box-repaired* auto **0.166 / 81.5%**.
+Box repair did not rescue it; more auto data was slightly worse. Auto cuts carry few-px noise, so the
+bottleneck is cut *precision*, not box alignment. The model stays baked on human cuts only — **keep
+auto docs out of `~/Downloads/label_boxes/`**.
+
+**Operational note:** a full page costs ~3-5M subagent tokens and 1-1.5h and will hit session/model
+limits mid-run. Resume from the workflow's `journal.jsonl` and package results yourself; both runs
+lost only their final packaging agent that way.
