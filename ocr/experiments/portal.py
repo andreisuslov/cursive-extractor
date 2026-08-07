@@ -31,7 +31,10 @@ import urllib.request
 from pathlib import Path
 
 BASE = os.environ.get("CURSIVE_BASE", "https://andreisuslov.com")
-REBAKE_DIR = Path(os.environ.get("LABEL_BOXES_DIR", Path.home() / "Downloads" / "label_boxes"))
+# Ingested cuts are irreplaceable hand labels; keep them version-controlled in the repo rather
+# than in ~/Downloads, which is routinely emptied. Override with LABEL_BOXES_DIR.
+REBAKE_DIR = Path(os.environ.get("LABEL_BOXES_DIR")
+                  or Path(__file__).resolve().parents[2] / "label_boxes")
 MOVED_PX = 1.0  # a cut this far from the seed's counts as human-placed
 NEAR_PX = 40.0  # box-centre distance within which a saved word matches a seed word
 
